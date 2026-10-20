@@ -1,0 +1,129 @@
+#include "optimization_algorithm.hpp"
+#include "driver.hpp"
+#include "newick.hpp"
+
+#ifdef RSCORE
+#include "rscore.hpp"
+namespace my_tool = rscore;
+#else
+#ifdef CASTER
+#include "caster.hpp"
+namespace my_tool = caster;
+#else
+#ifdef ASTRAL
+#include "astral.hpp"
+namespace my_tool = astral;
+#else
+#ifdef SISTER
+#include "sister.hpp"
+namespace my_tool = sister;
+#else
+#include "caster.hpp"
+namespace my_tool = caster;
+#endif
+#endif
+#endif
+
+#endif
+
+using std::cerr;
+using std::endl;
+using namespace std::string_literals;
+
+ChangeLog logmain("main",
+	"2026-02-01", "Chao Zhang", "Change default -r -s --subsample-min", "patch",
+	"2026-02-08", "Chao Zhang", "Add --root option", "patch",
+	"2026-02-13", "Chao Zhang", "Add time in logs", "patch",
+	"2026-03-02", "Chao Zhang", "Allowing no support for quad score undefined", "patch",
+	"2026-10-15", "Chao Zhang", "Adding guide tree support", "minor");
+
+int main(int argc, char* argv[]) {
+	static_assert(driver::DRIVER<my_tool::Driver>);
+
+	using std::string;
+	using std::size_t;
+	using Clock = std::chrono::high_resolution_clock;
+	using Driver = my_tool::Driver<true>;
+
+	std::pair<string, string> programNames = Driver::programNames();
+	my_tool::Documentation documentation;
+	ARG.set("SHORT_NAME", programNames.first); 
+	ARG.set("FULL_NAME", programNames.second);
+	ARG.set("DOCUMENTATION", documentation());
+
+	ARG.addArgument('h', "help", "flag", "Display help message", 6, true);
+	ARG.addArgument('i', "input", "string", "Input file path", 5);
+	ARG.addArgument('o', "output", "string", "Output file path, print to stdout if not provided", 5, true);
+	ARG.addArgument('t', "thread", "integer", "Number of threads", 4, true, true, "1");
+	ARG.addArgument('a', "mapping", "string", "Mapping file path, a list of gene/speicesman name to taxon name maps, each line contains one gene/speicesman name followed by one taxon name separated by a space or tab", 3, true, false);
+	ARG.addArgument('g', "guide", "string", "Newick file containing binary trees as guide trees", 2, true, false);
+	ARG.addArgument('r', "initial-round", "integer", "Number of initial rounds of placement", 2, true, true, "8");
+	ARG.addArgument('s', "subsequent-round", "integer", "Number of subsequent rounds of placement", 2, true, true, "8");
+	ARG.addArgument('\0', "root", "string", "specify the most distant outgroup species", 3, true, false);
+	ARG.addArgument('\0', "verbose", "integer", "Verbose level", 0, true, true, "4");
+	ARG.addArgument('\0', "no-log", "flag", "Don't generate log file", 1, true);
+	ARG.addArgument('\0', "log", "string", "Log file path", 0, true, true, "log.txt");
+	ARG.addArgument('\0', "log-verbose", "integer", "Verbose level in log file", 0, true, true, "5");
+	ARG.addArgument('\0', "no-two-step", "flag", "Never use two-step placement algorithm", 1, true);
+	ARG.addArgument('\0', "subsample-min", "integer", "Minimum #Elements in each division when using subsample procedure", 1, true, true, "5000");
+	Driver::addArguments();
+
+	ARG.parse(argc, argv);
+	common::LogInfo::setVerbose(ARG.has("no-log") ? nullptr : new std::ofstream(ARG.get<string>("log")), ARG.get<size_t>("log-verbose"), ARG.get<size_t>("verbose"));
+	ARG.print();
+
+	if (ARG.has("root")) common::taxonName2ID[ARG.get<string>("root")];
+	
+	auto start = Clock::now();
+
+	ARG.log() << "Parsing input file(s)..." << endl;
+
+	std::visit([&start]<typename StepwiseColorSharedConstData>(StepwiseColorSharedConstData const& stepwiseColorSharedConstData){
+		size_t nTaxa = common::taxonName2ID.nTaxa();
+		size_t nThreads = ARG.get<size_t>("thread");
+		size_t nRounds = ARG.get<size_t>("initial-round");
+		size_t nSubsequent = ARG.get<size_t>("subsequent-round");
+
+		std::vector<common::AnnotatedBinaryTree> guides;
+		if (ARG.has("guide")) guides = newick::readGuideTrees(ARG.get<string>("guide"));
+
+		ARG.log() << "#Taxa: " << nTaxa << endl;
+		ARG.log() << "#Elements: " << stepwiseColorSharedConstData.nElements() << endl;
+		ARG.log() << "#Threads: " << nThreads << endl;
+		ARG.log() << "#Initial-rounds: " << nRounds << endl;
+		ARG.log() << "#Subsequent-rounds: " << nSubsequent << endl;
+		ARG.log() << "#Guide trees: " << guides.size() << endl;
+
+		ARG.log() << "Time after parsing input: " << (std::chrono::duration_cast<std::chrono::minutes>(Clock::now() - start)).count() << " minute(s)" << std::endl;
+
+		using Color = typename StepwiseColorSharedConstData::ParentClass;
+
+		using Alg = optimization_algorithm::Procedure<optimization_algorithm::DefaultProcedureAttributes<Color> >;
+
+		ARG.log() << "Optimiziation algorithm starts..." << endl;
+		common::AnnotatedBinaryTree tree = Alg::heuristSearch(stepwiseColorSharedConstData, nTaxa, nRounds, nSubsequent, nThreads, 0, Alg::defaultProcedure, guides);
+
+		tree.displaySimpleNewick(ARG.log() << "Final tree: ") << endl;
+
+		ARG.log() << "Time after optimization: " << (std::chrono::duration_cast<std::chrono::minutes>(Clock::now() - start)).count() << " minute(s)" << std::endl;
+
+		string supportKey;
+		if constexpr(driver::ANNOTATION_READY<my_tool::Driver>) {
+			supportKey = driver::annotate<my_tool::Driver, Color>(stepwiseColorSharedConstData, tree, nThreads, 0);
+			cerr << "Support annotation key: " << supportKey << endl;
+		}
+
+		ARG.log() << "Time after support annotation: " << (std::chrono::duration_cast<std::chrono::minutes>(Clock::now() - start)).count() << " minute(s)" << std::endl;
+
+		if (ARG.has("output")) {
+			std::ofstream fout(ARG.get<string>("output"));
+			tree.displaySimpleNewick<double, double>(fout, supportKey, "length");
+			fout << endl;
+		}
+		else {
+			tree.displaySimpleNewick<double, double>(std::cout, supportKey, "length");
+			std::cout << endl;
+		}
+	}, Driver::getStepwiseColorSharedConstData());
+	return 0;
+}

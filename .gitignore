@@ -8,7 +8,7 @@ rscore/aster2/bin/
 *.o
 
 # 上游参考克隆（需要时按 AGENTS.md 自行 clone）
-aster2/
+/aster2/
 
 # 日志与临时产物
 *.log
