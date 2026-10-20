@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.pyc
+
+# 编译产物
+rscore/solver/solver
+rscore/aster2/bin/
+*.o
+
+# 上游参考克隆（需要时按 AGENTS.md 自行 clone）
+aster2/
+
+# 日志与临时产物
+*.log
+rscore/results/*.log
+tmp/
+
+# 解压后的数据副本 / 杂项日志
+rep01.trees/
+log.txt
+rscore/log.txt
