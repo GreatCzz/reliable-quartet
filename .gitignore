@@ -19,3 +19,10 @@ tmp/
 rep01.trees/
 log.txt
 rscore/log.txt
+
+# aster2 工作副本：只保留 src / makefile / LICENSE（其余是上游示例）
+rscore/aster2/example/
+rscore/aster2/misc/
+rscore/aster2/sancheck/
+rscore/aster2/.github/
+rscore/aster2/doc/
