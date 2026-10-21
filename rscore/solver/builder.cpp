@@ -156,6 +156,7 @@ int main(int argc, char** argv) {
 	string inFile, outFile, seedOrder;
 	int threads = 8, budget = 300, cand = 10, Tgenes = 8, orderMode = 0;
 	bool nosearch = false;
+	long seed = -1;
 	for (int i = 1; i < argc; ++i) {
 		string s = argv[i];
 		auto nx = [&]() -> string { if (i + 1 < argc) return argv[++i]; std::exit(2); };
@@ -166,6 +167,7 @@ int main(int argc, char** argv) {
 		else if (s == "--cand") cand = std::stoi(nx());
 		else if (s == "--genes") Tgenes = std::stoi(nx());
 		else if (s == "--nosearch") nosearch = true;
+		else if (s == "--seed") seed = std::stol(nx());
 	}
 	if (inFile.empty()) { std::cerr << "usage: builder -i genes.trees -o out.tree [-t N] [--budget B] [--cand C] [--genes K]" << std::endl; return 2; }
 
@@ -190,6 +192,10 @@ int main(int argc, char** argv) {
 	for (auto const& g : genes) for (int u = 0; u < g.n; ++u) if (g.taxon[u] >= 0) freq[(size_t)g.taxon[u]]++;
 	vector<int> order(nTaxa); for (size_t i = 0; i < nTaxa; ++i) order[i] = (int)i;
 	std::sort(order.begin(), order.end(), [&](int x, int y) { return freq[(size_t)x] > freq[(size_t)y]; });
+	if (seed >= 0) {
+		std::mt19937_64 rng((std::uint64_t)seed);
+		std::shuffle(order.begin(), order.end(), rng);
+	}
 
 	// 事件：每个类群在"某棵基因树"里的初始锚点（父节点内另一个叶子），用于候选生成
 	vector<int> anchorTaxon(nTaxa, -1);
