@@ -225,7 +225,7 @@ int main(int argc, char** argv) {
 	for (int idx = 0; idx < (int)nTaxa; ++idx) {
 		int const x = order[idx];
 		if (inserted == 0) { S.taxon.push_back(x); S.par.push_back(-1); S.c0.push_back(-1); S.c1.push_back(-1);
-			S.sz.push_back(1); S.bits.resize(W, 0); S.bits[(size_t)x >> 6] |= 1ULL << (x & 63);
+			S.sz.push_back(1); S.wsum.push_back(0); S.bits.resize(W, 0); S.bits[(size_t)x >> 6] |= 1ULL << (x & 63);
 			S.n = 1; S.root = 0; nodeOfTaxon[x] = 0; inserted = 1; continue; }
 		if (inserted == 1) {
 			int const leaf = S.newNode(S.root, -1, -1, x);
@@ -294,8 +294,21 @@ int main(int argc, char** argv) {
 					delta += Wnode(genes[g], bUnion.data(), bOth, bC2.data(), sCur, sOth, sC, W, sc);
 				cur = a;
 			}
-			// 减去旧值：直接查缓存
-			for (int a = S.par[p]; a >= 0; a = S.par[a]) delta -= S.wsum[(size_t)a];
+			// 减去旧值（重算：插入会改变所有节点的补集，不能缓存）
+			{
+				int cur2 = p;
+				for (int a = S.par[p]; a >= 0; a = S.par[a]) {
+					int const other = (S.c0[a] == cur2) ? S.c1[a] : S.c0[a];
+					u64 const* bCur = S.bits.data() + (size_t)cur2 * W;
+					u64 const* bOth = S.bits.data() + (size_t)other * W;
+					int const sCur = S.sz[cur2], sOth = S.sz[other];
+					int const sC = (int)S.sz[S.root] - sCur - sOth;
+					for (size_t k = 0; k < W; ++k) bC2[k] = ~(bCur[k] | bOth[k]);
+					for (int g = 0; g < T; ++g)
+						delta -= Wnode(genes[g], bCur, bOth, bC2.data(), sCur, sOth, sC, W, sc);
+					cur2 = a;
+				}
+			}
 			deltas[ci] = delta;
 		}
 		for (int ci = 0; ci < (int)cands.size(); ++ci)
@@ -312,26 +325,26 @@ int main(int argc, char** argv) {
 		if (par < 0) S.root = w;
 		else { if (S.c0[par] == bestP) S.c0[par] = w; else S.c1[par] = w; }
 		S.par[bestP] = w;
+		S.par[leaf] = w;
 		// 更新祖先 bits/sz
 		for (int a = S.par[w]; a >= 0; a = S.par[a]) {
 			for (size_t k = 0; k < W; ++k) S.bits[(size_t)a*W + k] |= S.bits[(size_t)leaf*W + k];
 			S.sz[a] = S.sz[S.c0[a]] + S.sz[S.c1[a]];
 		}
 		nodeOfTaxon[x] = leaf;
-		// 刷新 wsum：新节点 w 及其所有祖先
-		{
-			Scratch& sc0 = scratch[0];
-			int curW = w;
-			while (curW >= 0) {
-				S.wsum[(size_t)curW] = nodeWsum(S, curW, genes, T, sc0);
-				curW = S.par[curW];
-			}
-		}
 		inserted++;
 		if (inserted % 500 == 0) std::cerr << "[builder] inserted " << inserted << " / " << nTaxa
 			<< "  (" << std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - t0).count() << " s)" << std::endl;
 	}
 
+	// 自检：Σ_v wsum[v]（内部节点）应当等于 2 × 官方分数
+	{
+		i64 sumFresh = 0;
+		Scratch& sc0 = scratch[0];
+		for (int v = 0; v < S.n; ++v) if (S.c0[v] >= 0)
+			sumFresh += nodeWsum(S, v, genes, T, sc0);
+		std::cerr << "[builder] sum_fresh = " << sumFresh << "  (= 2 x score)" << std::endl;
+	}
 	string const nw = toNewick(S, S.root) + ";";
 	if (outFile.empty()) std::cout << nw << std::endl;
 	else { std::ofstream f(outFile); f << nw << "\n"; }
