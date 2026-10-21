@@ -69,6 +69,51 @@ def cluster_arrays(ch, lab, root, member, m):
     return cnt, anc, cum, H
 
 
+def F_xy(gch, glab, groot, memx, memy, m):
+    """F(X,Y)：2 片在 X、2 片在 Y 的可靠四叶树数（X、Y 必须不交）。"""
+    _, ax, cx, Hx = cluster_arrays(gch, glab, groot, memx, m)
+    _, ay, cy, Hy = cluster_arrays(gch, glab, groot, memy, m)
+    return (cx[groot] * cy[groot]
+            - sum(ax[u] * ay[u] for u in range(m))
+            - sum(ay[u] * Hx[u] for u in range(m))
+            - sum(ax[u] * Hy[u] for u in range(m)))
+
+
+def unrooted_score_detailed(species_newick, gene_newick):
+    """无根四叶树总分：Σ_v W(A,B,C)/2（A,B 为 v 的两个孩子簇，C 为其余）。"""
+    sch, _, snm, _, sroot = parse_newick(species_newick)
+    gch, glab, gnm, _, groot = parse_newick(gene_newick)
+    m = len(gch)
+    gid = {gnm[u]: u for u in range(m) if not gch[u]}
+    leafsets = {u: set(leaves_under(sch, snm, u)) for u in range(len(sch))}
+    all_leaves = leafsets[sroot]
+    per_node = {}
+    total = 0
+    for v in range(len(sch)):
+        if not sch[v] or len(sch[v]) != 2:
+            continue
+        A = leafsets[sch[v][0]] & set(gid)
+        B = leafsets[sch[v][1]] & set(gid)
+        C = (all_leaves & set(gid)) - A - B
+        def mem(X):
+            a = [False] * m
+            for t in X:
+                a[gid[t]] = True
+            return a
+        mA, mB, mC = mem(A), mem(B), mem(C)
+        mAUB = [x or y for x, y in zip(mA, mB)]
+        mBUC = [x or y for x, y in zip(mB, mC)]
+        mAUC = [x or y for x, y in zip(mA, mC)]
+        W = (F_xy(gch, glab, groot, mA, mBUC, m) + F_xy(gch, glab, groot, mB, mAUC, m)
+             + F_xy(gch, glab, groot, mC, mAUB, m)
+             - 2 * (F_xy(gch, glab, groot, mA, mB, m)
+                    + F_xy(gch, glab, groot, mA, mC, m)
+                    + F_xy(gch, glab, groot, mB, mC, m)))
+        per_node[v] = W
+        total += W
+    return total // 2, per_node
+
+
 def fast_score_detailed(species_newick, gene_newick):
     sch, _, snm, _, _ = parse_newick(species_newick)
     gch, glab, gnm, _, groot = parse_newick(gene_newick)
@@ -99,4 +144,4 @@ def fast_score_detailed(species_newick, gene_newick):
 
 
 def fast_score(species_newick, gene_newick):
-    return fast_score_detailed(species_newick, gene_newick)[0]
+    return unrooted_score_detailed(species_newick, gene_newick)[0]

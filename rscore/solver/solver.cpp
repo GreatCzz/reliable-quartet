@@ -77,6 +77,7 @@ GeneTree buildGene(newick::Newick::Node const* const root) {
 
 // --------------------------------------------------------------- F evaluation
 struct Scratch {
+	vector<u64> t1, t2;   // 临时 bitset（三分划用）
 	vector<i64> c1, a1, m1, G1, H1, c2, a2, m2, G2, H2;
 	void resize(int n) {
 		c1.resize(n); a1.resize(n); m1.resize(n); G1.resize(n); H1.resize(n);
@@ -134,12 +135,37 @@ inline u64 evalF(GeneTree const& g, u64 const* const bl, u64 const* const br, Sc
 	return total > corr ? total - corr : 0;
 }
 
+// 三分划节点分数：W(A,B,C) = F(A,B∪C)+F(B,A∪C)+F(C,A∪B) − 2(F(A,B)+F(A,C)+F(B,C))
+// 总分 = Σ_v W_v / 2（无根四叶树口径）
+inline i64 Wnode(GeneTree const& g, u64 const* A, u64 const* B, u64 const* C,
+	int sA, int sB, int sC, size_t W, Scratch& sc) {
+	i64 const fAB = (sA >= 2 && sB >= 2) ? (i64)evalF(g, A, B, sc) : 0;
+	i64 const fAC = (sA >= 2 && sC >= 2) ? (i64)evalF(g, A, C, sc) : 0;
+	i64 const fBC = (sB >= 2 && sC >= 2) ? (i64)evalF(g, B, C, sc) : 0;
+	i64 gA = 0, gB = 0, gC = 0;
+	u64* const t = sc.t2.data();
+	if (sA >= 2 && sB + sC >= 2) {
+		for (size_t w = 0; w < W; ++w) t[w] = ~A[w];
+		gA = (i64)evalF(g, A, t, sc);
+	}
+	if (sB >= 2 && sA + sC >= 2) {
+		for (size_t w = 0; w < W; ++w) t[w] = ~B[w];
+		gB = (i64)evalF(g, B, t, sc);
+	}
+	if (sC >= 2 && sA + sB >= 2) {
+		for (size_t w = 0; w < W; ++w) t[w] = ~C[w];
+		gC = (i64)evalF(g, C, t, sc);
+	}
+	return gA + gB + gC - 2 * (fAB + fAC + fBC);
+}
+
 // --------------------------------------------------------------- species tree
 struct SpeciesTree {
 	int n = 0, root = 0;
 	vector<int> par, c0, c1, taxon;
 	vector<int> internal;      // node ids that have two children
 	vector<u64> bits;          // per node, W words
+	vector<int> sz;            // #taxa in each node's subtree
 	size_t W = 0;
 };
 
@@ -159,6 +185,7 @@ SpeciesTree buildSpecies(newick::Newick::Node const* const root, size_t nTaxa) {
 	t.root = 0;
 	t.W = (nTaxa + 63) / 64;
 	t.bits.assign((size_t)t.n * t.W, 0);
+	t.sz.assign(t.n, 0);
 	for (size_t i = 0; i < order.size(); ++i) {
 		auto* u = order[i];
 		if (u->children.empty()) {
@@ -181,11 +208,13 @@ SpeciesTree buildSpecies(newick::Newick::Node const* const root, size_t nTaxa) {
 		if (t.taxon[i] >= 0) {
 			size_t const x = (size_t)t.taxon[i];
 			dst[x >> 6] |= 1ULL << (x & 63);
+			t.sz[i] = 1;
 		}
 		else {
 			u64 const* const a = t.bits.data() + (size_t)t.c0[i] * t.W;
 			u64 const* const b = t.bits.data() + (size_t)t.c1[i] * t.W;
 			for (size_t w = 0; w < t.W; ++w) dst[w] = a[w] | b[w];
+			t.sz[i] = t.sz[t.c0[i]] + t.sz[t.c1[i]];
 		}
 	}
 	return t;
@@ -228,9 +257,17 @@ int main(int argc, char** argv) {
 	Args const args = parseArgs(argc, argv);
 
 	// species tree
+	if (args.species.empty() || args.input.empty()) {
+		std::cerr << "Error: -s <species tree> and -i <gene trees> are required" << std::endl;
+		return 2;
+	}
 	vector<newick::Newick> spTrees;
 	{
 		std::ifstream fin(args.species);
+		if (!fin.is_open()) {
+			std::cerr << "Error: cannot open species tree file: " << args.species << std::endl;
+			return 2;
+		}
 		string line;
 		while (std::getline(fin, line)) {
 			if (line.find_first_not_of(" \t\r\n") != string::npos) {
@@ -242,6 +279,10 @@ int main(int argc, char** argv) {
 	vector<GeneTree> genes;
 	{
 		std::ifstream fin(args.input);
+		if (!fin.is_open()) {
+			std::cerr << "Error: cannot open gene tree file: " << args.input << std::endl;
+			return 2;
+		}
 		string line;
 		while (std::getline(fin, line)) {
 			if (line.find_first_not_of(" \t\r\n") == string::npos) continue;
@@ -249,7 +290,19 @@ int main(int argc, char** argv) {
 			genes.push_back(buildGene(nw.root()));
 		}
 	}
+	if (genes.empty()) {
+		std::cerr << "Error: no gene tree found in " << args.input << std::endl;
+		return 2;
+	}
+	if (common::taxonName2ID.nTaxa() == 0) {
+		std::cerr << "Error: no taxa parsed" << std::endl;
+		return 2;
+	}
 	size_t const nTaxa = common::taxonName2ID.nTaxa();
+	if (spTrees.empty()) {
+		std::cerr << "Error: no tree found in species tree file: " << args.species << std::endl;
+		return 2;
+	}
 	SpeciesTree S = buildSpecies(spTrees[0].root(), nTaxa);
 
 	int const T = (int)genes.size();
@@ -257,27 +310,32 @@ int main(int argc, char** argv) {
 	std::cerr << "[solver] species nodes=" << S.n << " internal=" << K
 		<< " genes=" << T << " taxa=" << nTaxa << std::endl;
 
-	// cache: F(internal k, gene g)
+	// cache: W(internal k, gene g)
 	vector<i64> cache((size_t)K * (size_t)T, 0);
 
 	int const P = std::max(1, args.threads);
 	vector<Scratch> scratch(P);
 	int maxN = 1;
 	for (auto const& g : genes) maxN = std::max(maxN, g.n);
-	for (auto& s : scratch) s.resize(maxN);
+	for (auto& s : scratch) { s.resize(maxN); s.t1.assign(S.W, 0); s.t2.assign(S.W, 0); }
 
 	auto t0 = std::chrono::steady_clock::now();
 	#pragma omp parallel for schedule(dynamic) num_threads(P)
 	for (int k = 0; k < K; ++k) {
 		Scratch& sc = scratch[omp_get_thread_num()];
 		int const v = S.internal[k];
-		u64 const* const bl = S.bits.data() + (size_t)S.c0[v] * S.W;
-		u64 const* const br = S.bits.data() + (size_t)S.c1[v] * S.W;
+		int const a = S.c0[v], b = S.c1[v];
+		u64 const* const bA = S.bits.data() + (size_t)a * S.W;
+		u64 const* const bB = S.bits.data() + (size_t)b * S.W;
+		int const sC = (int)nTaxa - S.sz[a] - S.sz[b];
+		for (size_t w = 0; w < S.W; ++w) sc.t1[w] = ~(bA[w] | bB[w]);   // C
 		for (int g = 0; g < T; ++g)
-			cache[(size_t)k * T + g] = (i64)evalF(genes[g], bl, br, sc);
+			cache[(size_t)k * T + g] = Wnode(genes[g], bA, bB, sc.t1.data(),
+				S.sz[a], S.sz[b], sC, S.W, sc);
 	}
-	i64 total = 0;
-	for (i64 x : cache) total += x;
+	__int128 totalW = 0;
+	for (i64 x : cache) totalW += x;
+	i64 total = (i64)(totalW / 2);
 	std::cerr << "[solver] initial score = " << total << "  ("
 		<< std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - t0).count()
 		<< " s initial scoring)" << std::endl;
@@ -286,56 +344,62 @@ int main(int argc, char** argv) {
 	vector<int> idx(S.n, -1);
 	for (int k = 0; k < K; ++k) idx[S.internal[k]] = k;
 
-	vector<u64> tmpA(S.W), tmpB(S.W);   // union scratch (per sweep, single threaded)
+	vector<u64> tmpA(S.W);
+	vector<i64> WuArr(T), WvArr(T);
 
-	auto doSweeps = [&](int maxSweeps) {
-	for (int sweep = 1; sweep <= maxSweeps; ++sweep) {
+	for (int sweep = 1; sweep <= args.sweeps; ++sweep) {
 		i64 sweepGain = 0;
 		int moves = 0;
 		auto ts = std::chrono::steady_clock::now();
 		for (int k = 0; k < K; ++k) {
 			int const v = S.internal[k];
 			int const u = S.par[v];
-			if (u < 0 || S.c0[u] < 0) continue;               // parent must be internal
+			if (u < 0 || S.c0[u] < 0) continue;
 			int const a = (S.c0[u] == v) ? S.c1[u] : S.c0[u];
 			int const c = S.c0[v], d = S.c1[v];
 			int const ku = idx[u];
 			if (ku < 0) continue;
 
-			// two NNI variants
 			for (int var = 0; var < 2; ++var) {
-				int const x = (var == 0) ? c : d;          // moves up to u
-				int const y = (var == 0) ? d : c;          // stays with v
-				// v's new children: (a, y); u's new children: (v, x)
+				int const x = (var == 0) ? c : d;
+				int const y = (var == 0) ? d : c;
 				u64* const bA = S.bits.data() + (size_t)a * S.W;
 				u64* const bY = S.bits.data() + (size_t)y * S.W;
 				u64* const bX = S.bits.data() + (size_t)x * S.W;
-				u64* const bV = S.bits.data() + (size_t)v * S.W;
-				u64* const bU = S.bits.data() + (size_t)u * S.W;
-				for (size_t w = 0; w < S.W; ++w) tmpA[w] = bA[w] | bY[w];   // new v
-				// F(u_new) = F(tmpA, bX); F(v_new) = F(bA, bY)
+				for (size_t w = 0; w < S.W; ++w) tmpA[w] = bA[w] | bY[w];   // 新 v 的叶集合
+
+				int const sV = S.sz[a] + S.sz[y];
 				i64 delta = 0;
 				#pragma omp parallel for schedule(dynamic) num_threads(P) reduction(+:delta)
 				for (int g = 0; g < T; ++g) {
 					Scratch& sc = scratch[omp_get_thread_num()];
-					i64 const nu = (i64)evalF(genes[g], tmpA.data(), bX, sc);
-					i64 const nv = (i64)evalF(genes[g], bA, bY, sc);
-					delta += nu + nv - cache[(size_t)k * T + g] - cache[(size_t)ku * T + g];
+					// v' = (a, y)，C_v' = ~(a|y)
+					for (size_t w = 0; w < S.W; ++w) sc.t1[w] = ~tmpA[w];
+					i64 const wv = Wnode(genes[g], bA, bY, sc.t1.data(),
+						S.sz[a], S.sz[y], (int)nTaxa - sV, S.W, sc);
+					// u' = (v', x)，C_u' = ~(a|y|x)
+					u64 const* const bU = S.bits.data() + (size_t)u * S.W;
+					for (size_t w = 0; w < S.W; ++w) sc.t1[w] = ~(tmpA[w] | bX[w]);
+					i64 const wu = Wnode(genes[g], tmpA.data(), bX, sc.t1.data(),
+						sV, S.sz[x], (int)nTaxa - sV - S.sz[x], S.W, sc);
+					WuArr[g] = wu;
+					WvArr[g] = wv;
+					delta += wu + wv - cache[(size_t)k * T + g] - cache[(size_t)ku * T + g];
 				}
 				if (delta > 0) {
-					// accept: update tree + bits + cache
 					S.c0[v] = a; S.c1[v] = y; S.par[a] = v; S.par[y] = v;
 					S.c0[u] = v; S.c1[u] = x;
 					S.par[v] = u; S.par[x] = u;
-					memcpy(bV, tmpA.data(), S.W * sizeof(u64));
-					// refresh cache for u and v
+					S.sz[v] = sV;
+					memcpy(S.bits.data() + (size_t)v * S.W, tmpA.data(), S.W * sizeof(u64));
 					for (int g = 0; g < T; ++g) {
-						Scratch& sc = scratch[0];
-						cache[(size_t)k * T + g] = (i64)evalF(genes[g], bA, bY, sc);
-						cache[(size_t)ku * T + g] = (i64)evalF(genes[g], bV, bX, sc);
+						cache[(size_t)k * T + g] = WvArr[g];
+						cache[(size_t)ku * T + g] = WuArr[g];
 					}
-					total += delta; sweepGain += delta; ++moves;
-					break;   // move on to next edge
+					total += delta / 2;
+					sweepGain += delta / 2;
+					++moves;
+					break;
 				}
 			}
 		}
@@ -345,55 +409,6 @@ int main(int argc, char** argv) {
 			<< " s)" << std::endl;
 		if (moves == 0) break;
 	}
-	};
-
-	// ---- iterated local search: NNI to convergence, kick, repeat ----
-	vector<int> bestC0 = S.c0, bestC1 = S.c1, bestPar = S.par;
-	i64 bestTotal = total;
-	for (int round = 1; round <= args.rounds; ++round) {
-		if (round > 1) {
-			// random kick
-			std::mt19937_64 rng(12345 + round);
-			for (int k = 0; k < args.kick; ++k) {
-				// pick a random internal node v whose parent is internal
-				int v = -1;
-				for (int tries = 0; tries < 50; ++tries) {
-					int const cand = S.internal[rng() % S.internal.size()];
-					int const p = S.par[cand];
-					if (p >= 0 && S.c0[p] >= 0) { v = cand; break; }
-				}
-				if (v < 0) break;
-				int const u = S.par[v];
-				int const a = (S.c0[u] == v) ? S.c1[u] : S.c0[u];
-				int const c = S.c0[v], d = S.c1[v];
-				int const ku = idx[u];
-				int const x = (rng() & 1) ? c : d;
-				int const y = (x == c) ? d : c;
-				u64* const bA = S.bits.data() + (size_t)a * S.W;
-				u64* const bY = S.bits.data() + (size_t)y * S.W;
-				u64* const bX = S.bits.data() + (size_t)x * S.W;
-				u64* const bV = S.bits.data() + (size_t)v * S.W;
-				for (size_t w = 0; w < S.W; ++w) tmpA[w] = bA[w] | bY[w];
-				S.c0[v] = a; S.c1[v] = y; S.par[a] = v; S.par[y] = v;
-				S.c0[u] = v; S.c1[u] = x; S.par[v] = u; S.par[x] = u;
-				memcpy(bV, tmpA.data(), S.W * sizeof(u64));
-				for (int g = 0; g < T; ++g) {
-					Scratch& sc = scratch[0];
-					cache[(size_t)idx[v] * T + g] = (i64)evalF(genes[g], bA, bY, sc);
-					cache[(size_t)ku * T + g] = (i64)evalF(genes[g], bV, bX, sc);
-				}
-				total = 0;
-				for (i64 z : cache) total += z;
-			}
-		}
-		doSweeps(args.sweeps);
-		std::cerr << "[solver] round " << round << " total=" << total << std::endl;
-		if (total > bestTotal) {
-			bestTotal = total;
-			bestC0 = S.c0; bestC1 = S.c1; bestPar = S.par;
-		}
-	}
-	S.c0 = bestC0; S.c1 = bestC1; S.par = bestPar; total = bestTotal;
 
 	string const nw = toNewick(S, S.root) + ";";
 	if (args.output.empty()) std::cout << nw << std::endl;

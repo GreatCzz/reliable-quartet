@@ -83,7 +83,7 @@ g++ -std=c++20 -O3 -march=native -fopenmp -I ../aster2/src solver.cpp -o solver
 
 | 操作 | 耗时 | 内存 |
 |---|---|---|
-| 给一棵树打分 | ≈ 2.5 分钟 | ~0.3 GB |
+| 给一棵树打分 | ≈ 5–6 分钟 | ~0.3 GB |
 | NNI 一轮（1000 棵树） | ≈ 10 分钟 | ~0.3 GB |
 | 从零建树（共识 + 3 轮 NNI + 打分） | ≈ 40 分钟 | ~0.3 GB |
 
@@ -91,9 +91,10 @@ g++ -std=c++20 -O3 -march=native -fopenmp -I ../aster2/src solver.cpp -o solver
 
 | 树 | 分数 |
 |---|---|
-| `submissions/team01_consensus_v0.tree`（簇共识基线） | 533,877,922,026,824 |
-| `submissions/team01_nni_v2.tree`（共识 + NNI） | **632,996,196,599,254** |
-| `submissions/team01_rbuild.tree`（由 `rbuild.sh` 从零跑出） | 见 `rscore/results/rbuild_full.log` |
+| `team01_consensus_v0.tree` | 1,598,513,034,536,168 |
+| `team01_rbuild.tree`（当前最高） | **1,598,565,085,124,791** |
+
+> 口径已于 2026-10-21 修正为无根三分划（旧分数作废），详见 `scorer/SPEC.md` 与 `submissions/SCOREBOARD.md`。
 
 ## 8. 正确性验证
 
@@ -103,7 +104,7 @@ g++ -std=c++20 -O3 -march=native -fopenmp -I ../aster2/src solver.cpp -o solver
 
 ## 9. 已知限制与下一步
 
-- **初始树质量决定上限**：500 类群实验里，簇共识 + NNI 只能到 737M，而"打分放置"能到 1,315M；
+- **初始树质量决定上限**：修正后口径下 500 类群实验里，簇共识 + NNI = 1.889e9，"打分放置 + NNI" = 2.535e9；
 - 下一步计划：把"受限候选的打分插入"加进初始化阶段（骨架 ≈ √(n log n) 个类群打分放置，
   其余类群在簇伙伴附近 10–20 个候选位置里打分插入），预计能把全量分数显著推高；
 - 目前 `--rounds/--kick`（迭代局部搜索）在 500 类群上提升有限（<1%）。

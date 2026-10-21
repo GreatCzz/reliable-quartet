@@ -24,10 +24,12 @@ cd rscore/solver && g++ -std=c++20 -O3 -march=native -fopenmp -I ../aster2/src s
 
 ## 当前结果
 
-| 树 | 分数 |
+| 树 | 分数（修正后口径） |
 |---|---|
-| `submissions/team01_consensus_v0.tree`（簇共识基线） | 533,877,922,026,824 |
-| **`submissions/team01_nni_v2.tree`（推荐）** | **632,996,196,599,254** |
+| `submissions/team01_consensus_v0.tree`（簇共识基线） | 1,598,513,034,536,168 |
+| **`submissions/team01_rbuild.tree`（当前最高）** | **1,598,565,085,124,791** |
+
+> 2026-10-21：修正了计分口径（四叶树无根，三分划组合）。旧分数已作废，详见 `submissions/SCOREBOARD.md`。
 
 详见 [submissions/SCOREBOARD.md](submissions/SCOREBOARD.md)。
 

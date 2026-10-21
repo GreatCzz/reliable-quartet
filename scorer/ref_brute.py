@@ -116,28 +116,36 @@ class GeneTree:
                 and self.path_solid(c, v) and self.path_solid(d, v))
 
 
+def _edge_leafsets(sch, snm, sroot):
+    return {u: set(leaves_under(sch, snm, u)) for u in range(len(sch))}
+
+
 def brute_score(species_newick, gene_newick):
-    """返回 (总分, {S 节点: 该节点的贡献})。"""
-    sch, slab, snm, _, _ = parse_newick(species_newick)
+    """无根四叶树真值：每个四叶树只数一次（逐边分裂判定），与根位置无关。
+
+    返回 (总分, {物种树节点: 该节点的空占位}) —— 第二个返回值仅为兼容旧接口。
+    """
+    sch, _, snm, _, sroot = parse_newick(species_newick)
     g = GeneTree(gene_newick)
-    per_node = {}
+    leafsets = _edge_leafsets(sch, snm, sroot)
+    all_leaves = leafsets[sroot]
+    taxa = sorted(set(all_leaves) & g.taxa)
     total = 0
-    for v in range(len(sch)):
-        if not sch[v] or len(sch[v]) != 2:
-            continue
-        L = sorted(set(leaves_under(sch, snm, sch[v][0])) & g.taxa)
-        R = sorted(set(leaves_under(sch, snm, sch[v][1])) & g.taxa)
-        cnt = 0
-        for a, b in itertools.combinations(L, 2):
-            for c, d in itertools.combinations(R, 2):
-                if g.reliable(a, b, c, d):
-                    cnt += 1
-        per_node[v] = cnt
-        total += cnt
-    return total, per_node
-
-
-if __name__ == '__main__':
-    import sys
-    lines = [ln.strip() for ln in sys.stdin if ln.strip()]
-    print(brute_score(lines[0], lines[1])[0])
+    for quad in itertools.combinations(taxa, 4):
+        for (p1, p2) in (((quad[0], quad[1]), (quad[2], quad[3])),
+                         ((quad[0], quad[2]), (quad[1], quad[3])),
+                         ((quad[0], quad[3]), (quad[1], quad[2]))):
+            A, B = set(p1), set(p2)
+            shown = False
+            for u in range(len(sch)):
+                if u == sroot:
+                    continue
+                Su = leafsets[u]
+                Sv = all_leaves - Su
+                if (A <= Su and B <= Sv) or (B <= Su and A <= Sv):
+                    shown = True
+                    break
+            if shown and g.reliable(p1[0], p1[1], p2[0], p2[1]):
+                total += 1
+                break
+    return total, {}

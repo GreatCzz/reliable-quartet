@@ -20,27 +20,62 @@ else
   bad "对拍失败（见 /tmp/verify_difftest.log）"
 fi
 
-echo "== 3/4 提交树合法性 =="
-python3 - "$ROOT" <<'PY'
-import glob, re, sys, os
+echo "== 3/4 提交树合法性（叶子/标签/二叉性） =="
+python3 - "$ROOT" <<'PYCHECK'
+import glob, sys, os
 root = sys.argv[1]
+
+def parse(s):
+    """返回 (每个内部节点的孩子数列表, 叶子标签列表)；结构非法则抛异常。"""
+    s = s.strip().rstrip(';')
+    deg, labels = [], []
+    stack = [[]]
+    i, n = 0, len(s)
+    while i < n:
+        c = s[i]
+        if c == '(':
+            stack.append([]); i += 1
+        elif c == ')':
+            kids = stack.pop()
+            if not kids:
+                raise ValueError("empty internal node")
+            deg.append(len(kids))
+            stack[-1].append(None)
+            i += 1
+            while i < n and s[i] not in '(),;':
+                i += 1
+        elif c == ',':
+            i += 1
+        else:
+            j = i
+            while j < n and s[j] not in '(),;':
+                j += 1
+            lab = s[i:j].strip()
+            if not lab:
+                raise ValueError("empty leaf label")
+            labels.append(lab)
+            stack[-1].append(lab)
+            i = j
+    if len(stack) != 1 or len(stack[0]) != 1:
+        raise ValueError("malformed newick")
+    return deg, labels
+
 ok = True
 for f in sorted(glob.glob(os.path.join(root, 'submissions', '*.tree'))):
-    s = open(f).read().strip()
-    labels = re.findall(r'(?<=[(,])([^(),;]+)(?=[,)])', s)
-    depth = 0; balanced = True
-    for ch in s:
-        if ch == '(': depth += 1
-        elif ch == ')':
-            depth -= 1
-            if depth < 0: balanced = False
-    good = (len(labels) == 10000 and len(set(labels)) == 10000
-            and min(map(int, labels)) == 0 and max(map(int, labels)) == 9999
-            and balanced and depth == 0 and s.count(',') == 9999)
-    print(f"  [{'PASS' if good else 'FAIL'}] {os.path.basename(f)}: leaves={len(labels)}")
+    try:
+        deg, labels = parse(open(f).read())
+        binary = all(d == 2 for d in deg)
+        unique = len(set(labels)) == len(labels)
+        full = (len(labels) == 10000 and unique
+                and min(map(int, labels)) == 0 and max(map(int, labels)) == 9999)
+        good = binary and full
+        msg = f"leaves={len(labels)} binary={binary} unique={unique}"
+    except Exception as e:
+        good, msg = False, f"parse error: {e}"
+    print(f"  [{'PASS' if good else 'FAIL'}] {os.path.basename(f)}: {msg}")
     ok = ok and good
 sys.exit(0 if ok else 1)
-PY
+PYCHECK
 [ $? -eq 0 ] || fail=1
 
 echo "== 4/4 C++ 与 Python 打分一致性（40 类群真实数据） =="
@@ -73,11 +108,11 @@ PY
   cpp=$("$ROOT/rscore/solver/solver" -s "$tmp/s40.tree" -i "$tmp/g40.trees" -t 4 --sweeps 0 2>&1 | grep "initial score" | sed 's/.*= //' | awk '{print $1}')
   py=$(cd "$ROOT/scorer" && python3 - "$tmp" <<'PY'
 import sys
-from fast_formula import fast_score_detailed
+from fast_formula import fast_score
 tmp = sys.argv[1]
 S = open(tmp + '/s40.tree').read().strip()
 genes = [l.strip() for l in open(tmp + '/g40.trees') if l.strip()]
-print(sum(fast_score_detailed(S, g)[0] for g in genes))
+print(sum(fast_score(S, g) for g in genes))
 PY
 )
   if [ "$cpp" = "$py" ]; then pass "C++=$cpp == Python=$py"; else bad "C++=$cpp != Python=$py"; fi

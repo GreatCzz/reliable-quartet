@@ -17,11 +17,14 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 SOLVER="$HERE/solver/solver"
 PY=$(command -v python3)
 
-ensure_plain() {  # $1 = path (maybe .gz) -> prints path to plain file
+WORKDIR=$(mktemp -d "${TMPDIR:-/tmp}/rbuild.XXXXXX")   # 每次运行独立目录
+trap 'rm -rf "$WORKDIR"' EXIT
+
+ensure_plain() {  # $1 = path (maybe .gz) -> 解压到本次运行目录，避免复用旧数据
   local f="$1"
   if [[ "$f" == *.gz ]]; then
-    local out="/tmp/$(basename "${f%.gz}")"
-    [[ -s "$out" ]] || zcat "$f" > "$out"
+    local out="$WORKDIR/$(basename "${f%.gz}")"
+    zcat "$f" > "$out"
     echo "$out"
   else
     echo "$f"
@@ -55,7 +58,7 @@ else
   OUT=${2:-./species.tree}
   THREADS=${3:-32}
   SWEEPS=${4:-3}
-  INIT=/tmp/rbuild_init.tree
+  INIT="$WORKDIR/init.tree"
   echo "[rbuild] 1/3 簇共识初始化 ..."
   "$PY" "$HERE/../tools/build_consensus.py" "$GENES" "$INIT" >/dev/null
 fi
