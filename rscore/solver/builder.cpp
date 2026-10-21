@@ -118,10 +118,11 @@ struct DynTree {
 	int n = 0, root = -1;
 	vector<int> par, c0, c1, taxon, sz;
 	vector<u64> bits;
+	vector<i64> wsum;      // 每个节点的 Σ_g W(g)，插入时维护
 	size_t W = 0;
 
 	int newNode(int p, int a, int b, int tx) {
-		par.push_back(p); c0.push_back(a); c1.push_back(b); taxon.push_back(tx); sz.push_back(0);
+		par.push_back(p); c0.push_back(a); c1.push_back(b); taxon.push_back(tx); sz.push_back(0); wsum.push_back(0);
 		bits.resize(bits.size() + W, 0);
 		n++;
 		return n - 1;
@@ -130,7 +131,7 @@ struct DynTree {
 
 inline void setPath(u64* dst, u64 const* src, size_t W) { for (size_t w = 0; w < W; ++w) dst[w] = src[w]; }
 
-// 计算节点 v 的 W（对给定的基因子集求和）
+// 计算节点 v 的 W（对给定的基因子集求和；用于插入后刷新缓存）
 i64 nodeWsum(DynTree const& S, int v, vector<GeneTree> const& genes, int T, Scratch& sc) {
 	int const a = S.c0[v], b = S.c1[v];
 	if (a < 0) return 0;
@@ -293,19 +294,8 @@ int main(int argc, char** argv) {
 					delta += Wnode(genes[g], bUnion.data(), bOth, bC2.data(), sCur, sOth, sC, W, sc);
 				cur = a;
 			}
-			// 减去旧值（祖先链上每个节点的当前 W 之和）
-			cur = p;
-			for (int a = S.par[p]; a >= 0; a = S.par[a]) {
-				int const other = (S.c0[a] == cur) ? S.c1[a] : S.c0[a];
-				u64 const* bCur = S.bits.data() + (size_t)cur * W;
-				u64 const* bOth = S.bits.data() + (size_t)other * W;
-				int const sCur = S.sz[cur], sOth = S.sz[other];
-				int const sC = (int)S.sz[S.root] - sCur - sOth;
-				for (size_t k = 0; k < W; ++k) bC2[k] = ~(bCur[k] | bOth[k]);
-				for (int g = 0; g < T; ++g)
-					delta -= Wnode(genes[g], bCur, bOth, bC2.data(), sCur, sOth, sC, W, sc);
-				cur = a;
-			}
+			// 减去旧值：直接查缓存
+			for (int a = S.par[p]; a >= 0; a = S.par[a]) delta -= S.wsum[(size_t)a];
 			deltas[ci] = delta;
 		}
 		for (int ci = 0; ci < (int)cands.size(); ++ci)
@@ -328,6 +318,15 @@ int main(int argc, char** argv) {
 			S.sz[a] = S.sz[S.c0[a]] + S.sz[S.c1[a]];
 		}
 		nodeOfTaxon[x] = leaf;
+		// 刷新 wsum：新节点 w 及其所有祖先
+		{
+			Scratch& sc0 = scratch[0];
+			int curW = w;
+			while (curW >= 0) {
+				S.wsum[(size_t)curW] = nodeWsum(S, curW, genes, T, sc0);
+				curW = S.par[curW];
+			}
+		}
 		inserted++;
 		if (inserted % 500 == 0) std::cerr << "[builder] inserted " << inserted << " / " << nTaxa
 			<< "  (" << std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - t0).count() << " s)" << std::endl;
