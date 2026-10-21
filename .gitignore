@@ -26,3 +26,6 @@ rscore/aster2/misc/
 rscore/aster2/sancheck/
 rscore/aster2/.github/
 rscore/aster2/doc/
+
+# 上游参考克隆（ASTER v1，只读参考，不入库）
+/aster1/

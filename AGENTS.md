@@ -27,6 +27,7 @@ score(S) = Σ_{基因树 g} #{四叶树 q : q 被 S 显示，且在 g 中"可靠
 | `rscore/solver/solver.cpp` | C++ 核心：`evalF`（打分）+ NNI 局部搜索 | 主产物 |
 | `rscore/rbuild.sh` | 一键：共识初始化 → NNI → 打分 | 对外入口 |
 | `rscore/aster2/` | aster2 工作副本 + `src/rscore.hpp`（把计分接进其迭代框架） | 仅用于中等规模基准，**不是主路径** |
+| `aster1/` | ASTER v1 上游源码（只读参考，不入库，`.gitignore` 已忽略） | 迭代策略参考：多轮放置 + 三分划 DP 重组 |
 | `tools/build_consensus.py` | 簇共识初始化 | 秒级 |
 | `submissions/` | 提交树 + `SCOREBOARD.md` 分数台账 | 每次改分必须更新台账 |
 
