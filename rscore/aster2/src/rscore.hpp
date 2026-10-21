@@ -12,8 +12,9 @@
 //
 // where F(l, r) counts quartets ab|cd with a,b in l, c,d in r that are
 // "reliable" in the gene tree (paths a->b and c->d are entirely solid).
-// Hence elementScore() == F, and the framework's accumulated tree score is
-// exactly the official reliable-quartet score.
+// elementScore() returns W for the current tripartition, so the framework's
+// accumulated score equals 2 x the official reliable-quartet score (the factor
+// of two cancels in any comparison of species trees).
 //
 // R1: non-incremental implementation (O(n) per elementScore call).
 
@@ -35,7 +36,7 @@ namespace rscore {
 
 	struct Attributes {
 		using index_t = int;
-		using score_t = unsigned long long;
+		using score_t = long long;   // W 可为负，必须用有符号
 		using support_t = bool;
 		using length_t = bool;
 		static inline bool constexpr WEIGHTING_BY_SUPPORT = false;
@@ -98,9 +99,10 @@ namespace rscore {
 		}
 	};
 
-	// F(cluster of colour 1, cluster of colour 2) for one gene tree.
-	inline std::uint64_t reliableScore(GeneTree const& g,
-		vector<unsigned char> const& color, Scratch& s) {
+	// F(X, Y): quartets with two leaves whose colour is in maskX and two whose
+	// colour is in maskY (the masks must be disjoint).
+	inline std::uint64_t F_mask(GeneTree const& g,
+		vector<unsigned char> const& color, int maskX, int maskY, Scratch& s) {
 		int const n = g.n;
 		long long* const c1 = s.c1.data();
 		long long* const a1 = s.a1.data();
@@ -109,18 +111,18 @@ namespace rscore {
 		long long* const a2 = s.a2.data();
 		long long* const m2 = s.m2.data();
 
-		// bottom-up: cnt / anc (pairs anchored here) / cum (all pairs in subtree)
 		for (int i = n - 1; i >= 0; --i) {
 			int const t = g.taxon[i];
 			if (t >= 0) {
 				unsigned char const col = color[(size_t)t];
-				c1[i] = (col == 1) ? 1 : 0; a1[i] = 0; m1[i] = 0;
-				c2[i] = (col == 2) ? 1 : 0; a2[i] = 0; m2[i] = 0;
+				c1[i] = ((maskX >> col) & 1) ? 1 : 0;
+				c2[i] = ((maskY >> col) & 1) ? 1 : 0;
+				a1[i] = 0; m1[i] = 0; a2[i] = 0; m2[i] = 0;
 			}
 			else {
 				long long C1 = 0, X1 = 0, M1 = 0, C2 = 0, X2 = 0, M2 = 0;
 				for (int const ch : g.ch[i]) {
-					M1 += m1[ch];          // 子树内部的成对与父边无关，必须无条件累加
+					M1 += m1[ch];          // 子树内部的成对与父边无关
 					M2 += m2[ch];
 					if (!g.solid[ch]) continue;
 					long long const v1 = c1[ch], v2 = c2[ch];
@@ -135,7 +137,6 @@ namespace rscore {
 		long long const sq = m2[g.root];
 		if (sp == 0 || sq == 0) return 0;
 
-		// top-down: G / H and the three correction sums
 		long long* const G1 = s.G1.data();
 		long long* const H1 = s.H1.data();
 		long long* const G2 = s.G2.data();
@@ -160,17 +161,21 @@ namespace rscore {
 					+ (std::uint64_t)a1[ch] * (std::uint64_t)H2[ch];
 			}
 		}
-		std::uint64_t const total = (std::uint64_t)sp * (std::uint64_t)sq;
-		if (corr > total) {
-			static int warned = 0;
-			if (warned < 3) {
-				++warned;
-				std::cerr << "[rscore] corr > total: corr=" << corr << " total=" << total
-					<< " sp=" << sp << " sq=" << sq << std::endl;
-			}
-			return 0;
-		}
-		return total - corr;
+		return (std::uint64_t)sp * (std::uint64_t)sq - corr;
+	}
+
+	// 三分划节点分数（无根四叶树口径）：
+	// W(A,B,C) = F(A,B∪C) + F(B,A∪C) + F(C,A∪B) − 2(F(A,B)+F(A,C)+F(B,C))
+	inline long long W_colors(GeneTree const& g,
+		vector<unsigned char> const& color, Scratch& s) {
+		constexpr int M1 = 0b010, M2 = 0b100, M0 = 0b001;
+		long long const fAB = (long long)F_mask(g, color, M1, M2, s);
+		long long const fAC = (long long)F_mask(g, color, M1, M0, s);
+		long long const fBC = (long long)F_mask(g, color, M2, M0, s);
+		long long const gA = (long long)F_mask(g, color, M1, M2 | M0, s);
+		long long const gB = (long long)F_mask(g, color, M2, M1 | M0, s);
+		long long const gC = (long long)F_mask(g, color, M0, M1 | M2, s);
+		return gA + gB + gC - 2 * (fAB + fAC + fBC);
 	}
 
 	template<class Attributes> class Color {
@@ -215,12 +220,14 @@ namespace rscore {
 			trees_[iElement].color[iTaxon] = (unsigned char)jColor;
 		}
 
+		bool Wmode() const noexcept { return true; }
+
 		score_t elementScore(size_t iElement) noexcept {
 			static thread_local Scratch tl;
 			int maxN = 1;
 			if ((int)tl.c1.size() < data_->genes[iElement].n) { tl.resize(data_->genes[iElement].n); }
 			auto const& col = trees_[iElement].color;
-			score_t const res = (score_t)reliableScore(data_->genes[iElement], col, tl);
+			score_t const res = (score_t)W_colors(data_->genes[iElement], col, tl);
 			static std::atomic<int> nDbg{ 0 };
 			if (std::getenv("RSCORE_DEBUG") && nDbg.fetch_add(1) < 10) {
 				size_t n1 = 0, n2 = 0;
