@@ -1,29 +1,31 @@
-# 断点状态（2026-10-21 16:50）
+# 项目状态（2026-10-21 收尾）
 
-## 已完成
-- 计分改为**无根三分划**（`W(A,B,C)=F(A,B∪C)+F(B,A∪C)+F(C,A∪B)−2(F(A,B)+F(A,C)+F(B,C))`，`score=ΣW/2`）；
-  - `scorer/ref_brute.py`：真值改为无根逐边枚举；`fast_formula.py`、`solver.cpp`、`rscore.hpp` 全部同步；
-  - 对拍：1000+ 组随机（多叉/缺类群/单叉/D 0–50%/根重挂）与真值一致；`verify.sh` 全绿。
-- 框架版 `aster2/bin/rscore` 的 `elementScore` 也改为 W（`score_t` 有符号）；同一无根树不同根形式分数一致。
-- 全量（10000×1000）修正后分数：
-  - consensus_v0 = 1,598,513,034,536,168
-  - nni_v1 = 1,598,549,079,897,629 / nni_v2 = 1,598,519,571,771,453
-  - **rbuild = 1,598,565,085,124,791（当前最高）**
-- `builder.cpp`（打分插入）+ **节点 W 缓存**：
-  - 500 类群：构建 **2.7 s**（budget=60, cand=4, genes=4）→ NNI(40) = **2,117,331,551**
-  - 对照：簇共识+NNI = 1,888,878,746；框架树+NNI = 2,534,824,702（**已到 84%**）
+## 最终交付
 
-## 恢复后的优先事项
-1. 跑 `./rscore/verify.sh` 确认环境（编译 + 对拍 + 提交树检查）。
-2. 用 builder 做 500 类群参数扫描（budget/cand/genes），目标 ≥ 2.3e9；
-3. 全量：`builder → solver --sweeps`，预计构建 20–60 分钟、每轮 NNI ~10 分钟（需先按下面 A 优化或直接用现有速度跑）。
-4. 优化项 A（融合三色统计，预计 2.5×）：目前 6 次 `evalF` 各扫一遍全树；
-   可合并为 2 趟（3 色 cnt/anc/cum/G/H + 3 组 cross 统计），需严格对拍。
+| 项 | 内容 |
+|---|---|
+| **提交树** | `submissions/team01_rbuild.tree` = **1,598,565,085,124,791**（10000 类群 × 1000 棵树，修正后口径） |
+| 一键工具 | `rscore/rbuild.sh`（建树/打分/精修） |
+| 核心 | `rscore/solver/solver`（打分 + NNI）、`builder`（打分插入）、`recombine`（三分划并集 DP） |
+| 参考实现 | `scorer/`（暴力真值 + 快速公式 + 对拍） |
+| 自检 | `./verify.sh`（编译 + 对拍 + 提交树合法性 + C++/Python 一致） |
 
-## 命令速查
-```bash
-cd rscore/solver
-./builder -i ../results/baseline500_g.trees -o /tmp/b.tree -t 16 --budget 60 --cand 4 --genes 4
-./solver -s /tmp/b.tree -i ../results/baseline500_g.trees -t 8 --sweeps 40 -o /tmp/b_nni.tree
-```
-全量数据 `/tmp/rep01.trees`（重启后会丢）：`zcat rep01.trees.gz > /tmp/rep01.trees`
+## 关键数字
+
+- 全量打分：~5–6 分钟（32 线程，1000 棵树）；
+- NNI：500 类群秒级 / 1000 类群分钟级 / 10000 类群约 1 小时每轮（1000 棵树）；
+- 内存：~0.3 GB。
+
+## 做过的关键修正
+
+1. **计分口径（P0）**：改为无根三分划；根重挂不变性纳入回归测试；
+2. 显示判据、`cum` 累加、多叉保留等历史坑，全部写进 `AGENTS.md`；
+3. `verify.sh` 增加真二叉检查；`rbuild.sh` 用独立临时目录；solver 增加输入校验。
+
+## 已知瓶颈与后续方向
+
+- **瓶颈是构造，不是局部搜索**：NNI 20 轮收敛，但不同起点差 25%（1.77 vs 2.53e9 @500）；
+- 重组（`recombine`）在输入同质时 = max(输入)，需要多样化/更好的构造；
+- 框架式放置（aster2）在 500 类群就要 15+ 分钟、1000 类群跑不完 —— **根因是 `elementScore` 为 O(n)**；
+- 若要继续提升：实现"一次基因树遍历同时算出所有候选分支分数"的放置 DP（约 1–2 天），
+  或把打分原语做成 O(1) 增量（更难，涉及祖先耦合项）。

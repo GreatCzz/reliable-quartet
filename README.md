@@ -27,7 +27,7 @@ cd rscore/solver && g++ -std=c++20 -O3 -march=native -fopenmp -I ../aster2/src s
 | 树 | 分数（修正后口径） |
 |---|---|
 | `submissions/team01_consensus_v0.tree`（簇共识基线） | 1,598,513,034,536,168 |
-| **`submissions/team01_rbuild.tree`（当前最高）** | **1,598,565,085,124,791** |
+| **`submissions/team01_rbuild.tree`（推荐提交）** | **1,598,565,085,124,791** |
 
 > 2026-10-21：修正了计分口径（四叶树无根，三分划组合）。旧分数已作废，详见 `submissions/SCOREBOARD.md`。
 
@@ -46,7 +46,7 @@ cd rscore/solver && g++ -std=c++20 -O3 -march=native -fopenmp -I ../aster2/src s
 ├── scorer/                 ← Python 参考实现（暴力 + 快速公式 + 对拍）
 ├── rscore/                 ← C++ 工具与实验（主战场）
 │   ├── rbuild.sh           ← 一键建树/打分
-│   ├── solver/             ← 打分 + NNI 局部搜索（核心）
+│   ├── solver/             ← solver（打分+NNI）、builder（打分插入）、recombine（并集 DP）
 │   ├── aster2/             ← aster2 工作副本（含 rscore.hpp：把计分接进其迭代框架）
 │   ├── results/            ← 实验产物（树、日志）
 │   └── USAGE.md            ← 工具使用说明

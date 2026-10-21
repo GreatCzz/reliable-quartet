@@ -25,6 +25,8 @@ score(S) = Σ_{基因树 g} #{四叶树 q : q 被 S 显示，且在 g 中"可靠
 | `scorer/` | Python：`ref_brute.py`（暴力，绝对可信）、`fast_formula.py`（快速公式）、`difftest.py` | **唯一权威口径**；改 C++ 前先在这里验证 |
 | `scorer/SPEC.md` | 公式推导、两处历史 bug 的修正 | 实现前必读 |
 | `rscore/solver/solver.cpp` | C++ 核心：`evalF`（打分）+ NNI 局部搜索 | 主产物 |
+| `rscore/solver/builder.cpp` | 打分插入构造（`--nosearch` 为顺序毛毛虫） | 构造实验 |
+| `rscore/solver/recombine.cpp` | 三分划并集 DP 重组多棵树 | 重组实验 |
 | `rscore/rbuild.sh` | 一键：共识初始化 → NNI → 打分 | 对外入口 |
 | `rscore/aster2/` | aster2 工作副本 + `src/rscore.hpp`（把计分接进其迭代框架） | 仅用于中等规模基准，**不是主路径** |
 | `aster1/` | ASTER v1 上游源码（只读参考，不入库，`.gitignore` 已忽略） | 迭代策略参考：多轮放置 + 三分划 DP 重组 |
