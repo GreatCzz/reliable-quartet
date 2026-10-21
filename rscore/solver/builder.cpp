@@ -318,6 +318,7 @@ int main(int argc, char** argv) {
 		for (int ci = 0; ci < (int)cands.size(); ++ci)
 			if (deltas[ci] > bestDelta) { bestDelta = deltas[ci]; bestP = cands[ci]; }
 
+
 		// 执行插入
 		int const leaf = S.newNode(bestP, -1, -1, x);
 		S.sz[leaf] = 1;
