@@ -155,6 +155,7 @@ string toNewick(DynTree const& S, int u) {
 int main(int argc, char** argv) {
 	string inFile, outFile, seedOrder;
 	int threads = 8, budget = 300, cand = 10, Tgenes = 8, orderMode = 0;
+	bool nosearch = false;
 	for (int i = 1; i < argc; ++i) {
 		string s = argv[i];
 		auto nx = [&]() -> string { if (i + 1 < argc) return argv[++i]; std::exit(2); };
@@ -164,6 +165,7 @@ int main(int argc, char** argv) {
 		else if (s == "--budget") budget = std::stoi(nx());
 		else if (s == "--cand") cand = std::stoi(nx());
 		else if (s == "--genes") Tgenes = std::stoi(nx());
+		else if (s == "--nosearch") nosearch = true;
 	}
 	if (inFile.empty()) { std::cerr << "usage: builder -i genes.trees -o out.tree [-t N] [--budget B] [--cand C] [--genes K]" << std::endl; return 2; }
 
@@ -239,7 +241,9 @@ int main(int argc, char** argv) {
 
 		// 候选位置集合
 		vector<int> cands;
-		if (inserted < budget) {
+		if (nosearch) {
+			cands.push_back(S.root);          // 直接挂到根：O(1) 插入，复现"顺序毛毛虫"
+		} else if (inserted < budget) {
 			for (int v = 0; v < S.n; ++v) cands.push_back(v);
 		} else {
 			int anchor = anchorTaxon[x];
