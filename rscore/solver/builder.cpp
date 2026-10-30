@@ -9,6 +9,7 @@
 #include "newick.hpp"
 #include <algorithm>
 #include <chrono>
+#include <climits>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -108,9 +109,9 @@ inline i64 Wnode(GeneTree const& g, u64 const* A, u64 const* B, u64 const* C,
 	i64 const fBC = (sB >= 2 && sC >= 2) ? (i64)evalF(g, B, C, sc) : 0;
 	i64 gA = 0, gB = 0, gC = 0;
 	u64* t = sc.t2.data();
-	if (sA >= 2 && sB + sC >= 2) { for (size_t w = 0; w < W; ++w) t[w] = ~A[w]; gA = (i64)evalF(g, A, t, sc); }
-	if (sB >= 2 && sA + sC >= 2) { for (size_t w = 0; w < W; ++w) t[w] = ~B[w]; gB = (i64)evalF(g, B, t, sc); }
-	if (sC >= 2 && sA + sB >= 2) { for (size_t w = 0; w < W; ++w) t[w] = ~C[w]; gC = (i64)evalF(g, C, t, sc); }
+	if (sA >= 2 && sB + sC >= 2) { for (size_t w = 0; w < W; ++w) t[w] = B[w] | C[w]; gA = (i64)evalF(g, A, t, sc); }
+	if (sB >= 2 && sA + sC >= 2) { for (size_t w = 0; w < W; ++w) t[w] = A[w] | C[w]; gB = (i64)evalF(g, B, t, sc); }
+	if (sC >= 2 && sA + sB >= 2) { for (size_t w = 0; w < W; ++w) t[w] = A[w] | B[w]; gC = (i64)evalF(g, C, t, sc); }
 	return gA + gB + gC - 2 * (fAB + fAC + fBC);
 }
 
@@ -129,20 +130,125 @@ struct DynTree {
 	}
 };
 
-inline void setPath(u64* dst, u64 const* src, size_t W) { for (size_t w = 0; w < W; ++w) dst[w] = src[w]; }
-
-// 计算节点 v 的 W（对给定的基因子集求和；用于插入后刷新缓存）
-i64 nodeWsum(DynTree const& S, int v, vector<GeneTree> const& genes, int T, Scratch& sc) {
+// 计算节点 v 的 W（对给定的基因子集求和；用于插入后刷新缓存）。
+// activeMask 是当前部分树中的类群全集；不能把尚未插入的类群计入 C。
+i64 nodeWsum(DynTree const& S, int v, vector<GeneTree> const& genes, int T,
+	vector<u64> const& activeMask, int activeCount, Scratch& sc) {
 	int const a = S.c0[v], b = S.c1[v];
 	if (a < 0) return 0;
 	u64 const* bA = S.bits.data() + (size_t)a * S.W;
 	u64 const* bB = S.bits.data() + (size_t)b * S.W;
-	int const sC = (int)S.sz[S.root] - S.sz[a] - S.sz[b];
-	for (size_t w = 0; w < S.W; ++w) sc.t1[w] = ~(bA[w] | bB[w]);
+	int const sC = activeCount - S.sz[a] - S.sz[b];
+	for (size_t w = 0; w < S.W; ++w)
+		sc.t1[w] = activeMask[w] & ~(bA[w] | bB[w]);
 	i64 sum = 0;
 	for (int g = 0; g < T; ++g)
 		sum += Wnode(genes[g], bA, bB, sc.t1.data(), S.sz[a], S.sz[b], sC, S.W, sc);
 	return sum;
+}
+
+inline void setComplement(u64* dst, u64 const* universe, u64 const* A,
+	u64 const* B, size_t W) {
+	for (size_t w = 0; w < W; ++w) dst[w] = universe[w] & ~(A[w] | B[w]);
+}
+
+// 精确计算把 x 插到 p 上方时 ΣW 的变化。除插入路径上簇发生扩张外，
+// 其余旧节点的 C 分区也会增加 x，因此所有旧内部节点都必须重新计分。
+i64 candidateDelta(DynTree const& S, int p, u64 const* bX,
+	vector<u64> const& activePlusX, vector<GeneTree> const& genes, int T, Scratch& sc) {
+	size_t const W = S.W;
+	int const afterCount = S.sz[S.root] + 1;
+	u64 const* const bP = S.bits.data() + (size_t)p * W;
+	vector<int> pathChild(S.n, -1);
+	int cur = p;
+	for (int a = S.par[p]; a >= 0; a = S.par[a]) {
+		pathChild[a] = cur;
+		cur = a;
+	}
+
+	vector<u64> bA(W), bB(W), cNew(W);
+	i64 delta = 0;
+	for (int v = 0; v < S.n; ++v) {
+		if (S.c0[v] < 0) continue;
+		int const left = S.c0[v], right = S.c1[v];
+		u64 const* const oldA = S.bits.data() + (size_t)left * W;
+		u64 const* const oldB = S.bits.data() + (size_t)right * W;
+		bool const expandLeft = pathChild[v] == left;
+		bool const expandRight = pathChild[v] == right;
+		for (size_t w = 0; w < W; ++w) {
+			bA[w] = oldA[w] | (expandLeft ? bX[w] : 0);
+			bB[w] = oldB[w] | (expandRight ? bX[w] : 0);
+		}
+		setComplement(cNew.data(), activePlusX.data(), bA.data(), bB.data(), W);
+		int const sizeA = S.sz[left] + (expandLeft ? 1 : 0);
+		int const sizeB = S.sz[right] + (expandRight ? 1 : 0);
+		i64 newW = 0;
+		for (int g = 0; g < T; ++g)
+			newW += Wnode(genes[g], bA.data(), bB.data(), cNew.data(), sizeA, sizeB,
+				afterCount - sizeA - sizeB, W, sc);
+		delta += newW - S.wsum[v];
+	}
+
+	// 插入新增的内部节点 (p, x)。
+	setComplement(cNew.data(), activePlusX.data(), bP, bX, W);
+	for (int g = 0; g < T; ++g)
+		delta += Wnode(genes[g], bP, bX, cNew.data(), S.sz[p], 1,
+			afterCount - S.sz[p] - 1, W, sc);
+	return delta;
+}
+
+void insertFirstTaxon(DynTree& S, int x) {
+	S.taxon.push_back(x); S.par.push_back(-1); S.c0.push_back(-1); S.c1.push_back(-1);
+	S.sz.push_back(1); S.wsum.push_back(0); S.bits.resize(S.W, 0);
+	S.bits[(size_t)x >> 6] |= 1ULL << (x & 63);
+	S.n = 1; S.root = 0;
+}
+
+void insertSecondTaxon(DynTree& S, int x) {
+	int const leaf = S.newNode(S.root, -1, -1, x);
+	S.bits[(size_t)leaf * S.W + ((size_t)x >> 6)] |= 1ULL << (x & 63);
+	S.sz[leaf] = 1;
+	int const newRoot = S.newNode(-1, S.root, leaf, -1);
+	S.par[S.root] = newRoot; S.par[leaf] = newRoot;
+	for (size_t w = 0; w < S.W; ++w)
+		S.bits[(size_t)newRoot * S.W + w] = S.bits[(size_t)S.c0[newRoot] * S.W + w]
+			| S.bits[(size_t)S.c1[newRoot] * S.W + w];
+	S.sz[newRoot] = S.sz[S.c0[newRoot]] + S.sz[S.c1[newRoot]];
+	S.root = newRoot;
+}
+
+int insertTaxonAbove(DynTree& S, int p, int x) {
+	int const leaf = S.newNode(p, -1, -1, x);
+	S.sz[leaf] = 1;
+	S.bits[(size_t)leaf * S.W + ((size_t)x >> 6)] = 1ULL << (x & 63);
+	int const par = S.par[p];
+	int const w = S.newNode(par, p, leaf, -1);
+	S.sz[w] = S.sz[p] + 1;
+	for (size_t k = 0; k < S.W; ++k)
+		S.bits[(size_t)w * S.W + k] = S.bits[(size_t)p * S.W + k]
+			| S.bits[(size_t)leaf * S.W + k];
+	if (par < 0) S.root = w;
+	else if (S.c0[par] == p) S.c0[par] = w;
+	else S.c1[par] = w;
+	S.par[p] = w;
+	S.par[leaf] = w;
+	for (int a = S.par[w]; a >= 0; a = S.par[a]) {
+		for (size_t k = 0; k < S.W; ++k)
+			S.bits[(size_t)a * S.W + k] |= S.bits[(size_t)leaf * S.W + k];
+		S.sz[a] = S.sz[S.c0[a]] + S.sz[S.c1[a]];
+	}
+	return leaf;
+}
+
+int commitInsertion(DynTree& S, int p, int x, vector<u64>& activeMask,
+	vector<GeneTree> const& genes, int T, Scratch& sc) {
+	int const leaf = insertTaxonAbove(S, p, x);
+	activeMask[(size_t)x >> 6] |= 1ULL << (x & 63);
+	int const activeCount = S.sz[S.root];
+	for (int v = 0; v < S.n; ++v)
+		if (S.c0[v] >= 0)
+			S.wsum[v] = nodeWsum(S, v, genes, T, activeMask, activeCount, sc);
+	return leaf;
 }
 
 string toNewick(DynTree const& S, int u) {
@@ -152,6 +258,7 @@ string toNewick(DynTree const& S, int u) {
 
 } // namespace
 
+#ifndef BUILDER_SELFTEST
 int main(int argc, char** argv) {
 	string inFile, outFile, seedOrder;
 	int threads = 8, budget = 300, cand = 10, Tgenes = 8, orderMode = 0;
@@ -221,6 +328,7 @@ int main(int argc, char** argv) {
 	}
 
 	DynTree S; S.W = W;
+	vector<u64> activeMask(W, 0);
 	vector<Scratch> scratch(threads);
 	int maxN = 1; for (auto const& g : genes) maxN = std::max(maxN, g.n);
 	for (auto& sc : scratch) sc.resize(maxN, W);
@@ -232,17 +340,20 @@ int main(int argc, char** argv) {
 	// 以 order 逐个插入
 	for (int idx = 0; idx < (int)nTaxa; ++idx) {
 		int const x = order[idx];
-		if (inserted == 0) { S.taxon.push_back(x); S.par.push_back(-1); S.c0.push_back(-1); S.c1.push_back(-1);
-			S.sz.push_back(1); S.wsum.push_back(0); S.bits.resize(W, 0); S.bits[(size_t)x >> 6] |= 1ULL << (x & 63);
-			S.n = 1; S.root = 0; nodeOfTaxon[x] = 0; inserted = 1; continue; }
+		if (inserted == 0) {
+			insertFirstTaxon(S, x);
+			activeMask[(size_t)x >> 6] |= 1ULL << (x & 63);
+			nodeOfTaxon[x] = 0;
+			inserted = 1;
+			continue;
+		}
 		if (inserted == 1) {
-			int const leaf = S.newNode(S.root, -1, -1, x);
-			S.bits[(size_t)x >> 6] |= 1ULL << (x & 63); S.sz[leaf] = 1;
-			int const newRoot = S.newNode(-1, S.root, leaf, -1);
-			S.par[S.root] = newRoot; S.par[leaf] = newRoot;
-			for (size_t w = 0; w < W; ++w) S.bits[(size_t)newRoot*W + w] = S.bits[(size_t)S.c0[newRoot]*W + w] | S.bits[(size_t)S.c1[newRoot]*W + w];
-			S.sz[newRoot] = S.sz[S.c0[newRoot]] + S.sz[S.c1[newRoot]];
-			S.root = newRoot; nodeOfTaxon[x] = leaf; inserted = 2; continue;
+			int const leaf = S.n;
+			insertSecondTaxon(S, x);
+			activeMask[(size_t)x >> 6] |= 1ULL << (x & 63);
+			nodeOfTaxon[x] = leaf;
+			inserted = 2;
+			continue;
 		}
 
 		// 候选位置集合
@@ -260,90 +371,25 @@ int main(int argc, char** argv) {
 			// （略：路径已覆盖大部分情况）
 		}
 
-		// 评估：把 x 插到候选 p 的上方（精确 Δ(ΣW)）
+		// 评估：把 x 插到候选 p 的上方，补集仅包含当前/插入后的 active taxa。
 		i64 bestDelta = LLONG_MIN; int bestP = cands.empty() ? S.root : cands[0];
 		vector<i64> deltas(cands.size(), LLONG_MIN);
-		Scratch& sc = scratch[0];
-		vector<u64> bX(W, 0), bA(W), bB(W), bC(W);
+		vector<u64> bX(W, 0), activePlusX = activeMask;
 		bX[(size_t)x >> 6] |= 1ULL << (x & 63);
+		for (size_t k = 0; k < W; ++k) activePlusX[k] |= bX[k];
 		#pragma omp parallel for schedule(dynamic) num_threads(threads)
 		for (int ci = 0; ci < (int)cands.size(); ++ci) {
-			int const p = cands[ci];
 			Scratch& sc = scratch[omp_get_thread_num()];
-			vector<u64> bUnion(W), bC2(W);
-			i64 delta = 0;
-			// 新节点 w = (p, x)
-			for (size_t k = 0; k < W; ++k) bUnion[k] = S.bits[(size_t)p * W + k] | bX[k];
-			{
-				int const sA = S.sz[p] + 1, sB = 1;
-				int const sC = (int)S.sz[S.root] - sA - sB;
-				for (size_t k = 0; k < W; ++k) bC2[k] = ~(bUnion[k] | bX[k]);
-				for (int g = 0; g < T; ++g)
-					delta += Wnode(genes[g], bUnion.data(), bX.data(), bC2.data(), sA, sB, sC, W, sc);
-			}
-			// p 若是当前的根：插入后 p 的补集从空变成 {x}（旧 W_p = 0）
-			if (S.par[p] < 0) {
-				int const A0 = S.c0[p], B0 = S.c1[p];
-				u64 const* bA0 = S.bits.data() + (size_t)A0 * W;
-				u64 const* bB0 = S.bits.data() + (size_t)B0 * W;
-				int const sA0 = S.sz[A0], sB0 = S.sz[B0];
-				for (int g = 0; g < T; ++g)
-					delta += Wnode(genes[g], bA0, bB0, bX.data(), sA0, sB0, 1, W, sc);
-			}
-			// 祖先链
-			int cur = p;
-			for (int a = S.par[p]; a >= 0; a = S.par[a]) {
-				int const other = (S.c0[a] == cur) ? S.c1[a] : S.c0[a];
-				u64 const* bCur = S.bits.data() + (size_t)cur * W;
-				u64 const* bOth = S.bits.data() + (size_t)other * W;
-				for (size_t k = 0; k < W; ++k) bUnion[k] = bCur[k] | bX[k];
-				int const sCur = S.sz[cur] + 1, sOth = S.sz[other];
-				int const sC = (int)S.sz[S.root] - sCur - sOth;
-				for (size_t k = 0; k < W; ++k) bC2[k] = ~(bUnion[k] | bOth[k]);
-				for (int g = 0; g < T; ++g)
-					delta += Wnode(genes[g], bUnion.data(), bOth, bC2.data(), sCur, sOth, sC, W, sc);
-				cur = a;
-			}
-			// 减去旧值（重算：插入会改变所有节点的补集，不能缓存）
-			{
-				int cur2 = p;
-				for (int a = S.par[p]; a >= 0; a = S.par[a]) {
-					int const other = (S.c0[a] == cur2) ? S.c1[a] : S.c0[a];
-					u64 const* bCur = S.bits.data() + (size_t)cur2 * W;
-					u64 const* bOth = S.bits.data() + (size_t)other * W;
-					int const sCur = S.sz[cur2], sOth = S.sz[other];
-					int const sC = (int)S.sz[S.root] - sCur - sOth;
-					for (size_t k = 0; k < W; ++k) bC2[k] = ~(bCur[k] | bOth[k]);
-					for (int g = 0; g < T; ++g)
-						delta -= Wnode(genes[g], bCur, bOth, bC2.data(), sCur, sOth, sC, W, sc);
-					cur2 = a;
-				}
-			}
-			deltas[ci] = delta;
+			deltas[ci] = candidateDelta(S, cands[ci], bX.data(), activePlusX, genes, T, sc);
 		}
 		for (int ci = 0; ci < (int)cands.size(); ++ci)
 			if (deltas[ci] > bestDelta) { bestDelta = deltas[ci]; bestP = cands[ci]; }
 
 
-		// 执行插入
-		int const leaf = S.newNode(bestP, -1, -1, x);
-		S.sz[leaf] = 1;
-		S.bits[(size_t)leaf*W + ((size_t)x >> 6)] = 1ULL << (x & 63);
-		int const w = S.newNode(S.par[bestP], bestP, leaf, -1);
-		S.sz[w] = S.sz[bestP] + 1;
-		for (size_t k = 0; k < W; ++k) S.bits[(size_t)w*W + k] = S.bits[(size_t)bestP*W + k] | S.bits[(size_t)leaf*W + k];
-		int const par = S.par[bestP];
-		if (par < 0) S.root = w;
-		else { if (S.c0[par] == bestP) S.c0[par] = w; else S.c1[par] = w; }
-		S.par[bestP] = w;
-		S.par[leaf] = w;
-		// 更新祖先 bits/sz
-		for (int a = S.par[w]; a >= 0; a = S.par[a]) {
-			for (size_t k = 0; k < W; ++k) S.bits[(size_t)a*W + k] |= S.bits[(size_t)leaf*W + k];
-			S.sz[a] = S.sz[S.c0[a]] + S.sz[S.c1[a]];
-		}
+		// 执行插入并刷新受影响节点的缓存。
+		int const leaf = commitInsertion(S, bestP, x, activeMask, genes, T, scratch[0]);
 		nodeOfTaxon[x] = leaf;
-		inserted++;
+		++inserted;
 		if (inserted % 500 == 0) std::cerr << "[builder] inserted " << inserted << " / " << nTaxa
 			<< "  (" << std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - t0).count() << " s)" << std::endl;
 	}
@@ -353,8 +399,15 @@ int main(int argc, char** argv) {
 		i64 sumFresh = 0;
 		Scratch& sc0 = scratch[0];
 		for (int v = 0; v < S.n; ++v) if (S.c0[v] >= 0)
-			sumFresh += nodeWsum(S, v, genes, T, sc0);
-		std::cerr << "[builder] sum_fresh = " << sumFresh << "  (= 2 x score)" << std::endl;
+			sumFresh += nodeWsum(S, v, genes, T, activeMask, inserted, sc0);
+		i64 sumCached = 0;
+		for (int v = 0; v < S.n; ++v) if (S.c0[v] >= 0) sumCached += S.wsum[v];
+		if (sumCached != sumFresh) {
+			std::cerr << "[builder] ERROR: cached sum " << sumCached
+				<< " != fresh sum " << sumFresh << std::endl;
+			return 1;
+		}
+		std::cerr << "[builder] sum_fresh = " << sumFresh << " (= 2 x score)" << std::endl;
 	}
 	string const nw = toNewick(S, S.root) + ";";
 	if (outFile.empty()) std::cout << nw << std::endl;
@@ -362,3 +415,4 @@ int main(int argc, char** argv) {
 	std::cerr << "[builder] done: " << nTaxa << " taxa" << std::endl;
 	return 0;
 }
+#endif
