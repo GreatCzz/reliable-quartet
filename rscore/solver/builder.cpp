@@ -1,6 +1,6 @@
 // builder: 用"打分插入"构造初始物种树（无根四叶树口径）。
 //
-// 思路：逐个插入类群；每个候选位置精确计算 Δ(ΣW)（含 p 到根所有祖先），取最优。
+// 思路：逐个插入类群；一次计算所有旧内部节点的 dA/dB/dC，树上前缀给出各候选增量。
 // 前 --budget 个类群用全候选（树小、便宜），其余只在"伙伴锚点"附近的候选里挑。
 // 输出一棵二叉 Newick，交给 solver 做 NNI。
 //
@@ -54,11 +54,13 @@ GeneTree buildGene(newick::Newick::Node const* const root) {
 
 struct Scratch {
 	vector<u64> t1, t2;
+	vector<u64> qA, qB, qC; // 批量插入计算的分区临时 bitset
 	vector<i64> c1, a1, m1, G1, H1, c2, a2, m2, G2, H2;
 	void resize(int n, size_t W) {
 		c1.resize(n); a1.resize(n); m1.resize(n); G1.resize(n); H1.resize(n);
 		c2.resize(n); a2.resize(n); m2.resize(n); G2.resize(n); H2.resize(n);
 		t1.assign(W, 0); t2.assign(W, 0);
+		qA.assign(W, 0); qB.assign(W, 0); qC.assign(W, 0);
 	}
 };
 
@@ -197,6 +199,104 @@ i64 candidateDelta(DynTree const& S, int p, u64 const* bX,
 	return delta;
 }
 
+struct BatchStats {
+	vector<i64> dA, dB, dC;       // x 加入旧节点的左、右、外部分区增量
+	vector<i64> newNode;          // 候选位置新增内部节点的 W 增量
+	vector<i64> prefix;           // 从根到节点的方向修正前缀
+	i64 base = 0;                 // Σ_v dC[v]
+};
+
+// 一次为所有旧节点计算 dA/dB/dC，并为所有候选位置计算新增节点贡献。
+// 旧 candidateDelta 保留作 oracle；本函数只改变评估顺序，不改变 W 定义。
+void computeBatchStats(DynTree const& S, u64 const* bX,
+	vector<u64> const& activePlusX, vector<int> const& candidates,
+	vector<GeneTree> const& genes, int T,
+	vector<Scratch>& scratch, int threads, BatchStats& out) {
+	size_t const W = S.W;
+	int const afterCount = S.sz[S.root] + 1;
+	out.dA.assign(S.n, 0);
+	out.dB.assign(S.n, 0);
+	out.dC.assign(S.n, 0);
+	out.newNode.assign(S.n, 0);
+	out.prefix.assign(S.n, 0);
+	out.base = 0;
+
+	#pragma omp parallel for schedule(dynamic) num_threads(threads)
+	for (int v = 0; v < S.n; ++v) {
+		if (S.c0[v] < 0) continue;
+		Scratch& sc = scratch[omp_get_thread_num()];
+		int const left = S.c0[v], right = S.c1[v];
+		u64 const* const oldA = S.bits.data() + (size_t)left * W;
+		u64 const* const oldB = S.bits.data() + (size_t)right * W;
+		i64 const oldW = S.wsum[v];
+
+		// x 加入 A：只扩展 A，C 取 activePlusX 的补集。
+		for (size_t w = 0; w < W; ++w) {
+			sc.qA[w] = oldA[w] | bX[w];
+			sc.qB[w] = oldB[w];
+			sc.qC[w] = activePlusX[w] & ~(sc.qA[w] | sc.qB[w]);
+		}
+		i64 newA = 0;
+		for (int g = 0; g < T; ++g)
+			newA += Wnode(genes[g], sc.qA.data(), sc.qB.data(), sc.qC.data(),
+				S.sz[left] + 1, S.sz[right], afterCount - S.sz[left] - S.sz[right] - 1, W, sc);
+		out.dA[v] = newA - oldW;
+
+		// x 加入 B。
+		for (size_t w = 0; w < W; ++w) {
+			sc.qA[w] = oldA[w];
+			sc.qB[w] = oldB[w] | bX[w];
+			sc.qC[w] = activePlusX[w] & ~(sc.qA[w] | sc.qB[w]);
+		}
+		i64 newB = 0;
+		for (int g = 0; g < T; ++g)
+			newB += Wnode(genes[g], sc.qA.data(), sc.qB.data(), sc.qC.data(),
+				S.sz[left], S.sz[right] + 1, afterCount - S.sz[left] - S.sz[right] - 1, W, sc);
+		out.dB[v] = newB - oldW;
+
+		// x 加入 C；A/B 不变，C 的大小增加一。
+		for (size_t w = 0; w < W; ++w) {
+			sc.qA[w] = oldA[w];
+			sc.qB[w] = oldB[w];
+			sc.qC[w] = activePlusX[w] & ~(sc.qA[w] | sc.qB[w]);
+		}
+		i64 newC = 0;
+		for (int g = 0; g < T; ++g)
+			newC += Wnode(genes[g], sc.qA.data(), sc.qB.data(), sc.qC.data(),
+				S.sz[left], S.sz[right], afterCount - S.sz[left] - S.sz[right], W, sc);
+		out.dC[v] = newC - oldW;
+	}
+
+	for (int v = 0; v < S.n; ++v)
+		if (S.c0[v] >= 0) out.base += out.dC[v];
+
+	// 节点编号按插入顺序增长，不保证是拓扑序；显式从 root 传播前缀。
+	vector<int> st{ S.root };
+	while (!st.empty()) {
+		int const v = st.back();
+		st.pop_back();
+		if (S.c0[v] < 0) continue;
+		int const left = S.c0[v], right = S.c1[v];
+		out.prefix[left] = out.prefix[v] + out.dA[v] - out.dC[v];
+		out.prefix[right] = out.prefix[v] + out.dB[v] - out.dC[v];
+		st.push_back(left);
+		st.push_back(right);
+	}
+
+	// 新增节点 (p,x) 的 W 与旧节点方向无关，可按候选并行计算。
+	#pragma omp parallel for schedule(dynamic) num_threads(threads)
+	for (int ci = 0; ci < (int)candidates.size(); ++ci) {
+		int const p = candidates[ci];
+		Scratch& sc = scratch[omp_get_thread_num()];
+		u64 const* const bP = S.bits.data() + (size_t)p * W;
+		for (size_t w = 0; w < W; ++w)
+			sc.qC[w] = activePlusX[w] & ~(bP[w] | bX[w]);
+		for (int g = 0; g < T; ++g)
+			out.newNode[p] += Wnode(genes[g], bP, bX, sc.qC.data(),
+				S.sz[p], 1, afterCount - S.sz[p] - 1, W, sc);
+	}
+}
+
 void insertFirstTaxon(DynTree& S, int x) {
 	S.taxon.push_back(x); S.par.push_back(-1); S.c0.push_back(-1); S.c1.push_back(-1);
 	S.sz.push_back(1); S.wsum.push_back(0); S.bits.resize(S.W, 0);
@@ -237,6 +337,30 @@ int insertTaxonAbove(DynTree& S, int p, int x) {
 			S.bits[(size_t)a * S.W + k] |= S.bits[(size_t)leaf * S.W + k];
 		S.sz[a] = S.sz[S.c0[a]] + S.sz[S.c1[a]];
 	}
+	return leaf;
+}
+
+int commitBatchInsertion(DynTree& S, int p, int x, vector<u64>& activeMask,
+	BatchStats const& stats) {
+	int const oldN = S.n;
+	// 必须在改拓扑前保存 p 到根的原始方向。
+	vector<std::pair<int, int>> path;
+	for (int child = p, a = S.par[p]; a >= 0; child = a, a = S.par[a]) {
+		int const dir = (S.c0[a] == child) ? 0 : 1;
+		path.emplace_back(a, dir);
+	}
+
+	// 所有旧节点先按 x 落入 C 更新；严格祖先再修正为其所在孩子方向。
+	for (int v = 0; v < oldN; ++v)
+		if (S.c0[v] >= 0) S.wsum[v] += stats.dC[v];
+	for (auto const& [a, dir] : path)
+		S.wsum[a] += (dir == 0 ? stats.dA[a] : stats.dB[a]) - stats.dC[a];
+
+	int const leaf = insertTaxonAbove(S, p, x);
+	activeMask[(size_t)x >> 6] |= 1ULL << (x & 63);
+	int const newInternal = oldN + 1; // insertTaxonAbove 先建 leaf，再建 internal
+	S.wsum[leaf] = 0;
+	S.wsum[newInternal] = stats.newNode[p];
 	return leaf;
 }
 
@@ -371,23 +495,34 @@ int main(int argc, char** argv) {
 			// （略：路径已覆盖大部分情况）
 		}
 
-		// 评估：把 x 插到候选 p 的上方，补集仅包含当前/插入后的 active taxa。
-		i64 bestDelta = LLONG_MIN; int bestP = cands.empty() ? S.root : cands[0];
-		vector<i64> deltas(cands.size(), LLONG_MIN);
+		// 候选来源扩展后仍保持稳定的首选顺序，并避免重复位置并行写入。
+		{
+			vector<char> seen(S.n, 0);
+			vector<int> unique;
+			unique.reserve(cands.size());
+			for (int p : cands) if (!seen[p]) {
+				seen[p] = 1;
+				unique.push_back(p);
+			}
+			cands.swap(unique);
+		}
+
+		// 评估：先一次计算所有旧节点的三个方向增量，再 O(1) 得到候选总增量。
 		vector<u64> bX(W, 0), activePlusX = activeMask;
 		bX[(size_t)x >> 6] |= 1ULL << (x & 63);
 		for (size_t k = 0; k < W; ++k) activePlusX[k] |= bX[k];
-		#pragma omp parallel for schedule(dynamic) num_threads(threads)
-		for (int ci = 0; ci < (int)cands.size(); ++ci) {
-			Scratch& sc = scratch[omp_get_thread_num()];
-			deltas[ci] = candidateDelta(S, cands[ci], bX.data(), activePlusX, genes, T, sc);
+		BatchStats stats;
+		computeBatchStats(S, bX.data(), activePlusX, cands, genes, T, scratch, threads, stats);
+		i64 bestDelta = LLONG_MIN; int bestP = cands.empty() ? S.root : cands[0];
+		vector<i64> deltas(cands.size(), LLONG_MIN);
+		for (size_t ci = 0; ci < cands.size(); ++ci) {
+			int const p = cands[ci];
+			deltas[ci] = stats.base + stats.prefix[p] + stats.newNode[p];
+			if (deltas[ci] > bestDelta) { bestDelta = deltas[ci]; bestP = p; }
 		}
-		for (int ci = 0; ci < (int)cands.size(); ++ci)
-			if (deltas[ci] > bestDelta) { bestDelta = deltas[ci]; bestP = cands[ci]; }
 
-
-		// 执行插入并刷新受影响节点的缓存。
-		int const leaf = commitInsertion(S, bestP, x, activeMask, genes, T, scratch[0]);
+		// 执行插入：旧节点缓存只按方向增量更新，不再全量重建。
+		int const leaf = commitBatchInsertion(S, bestP, x, activeMask, stats);
 		nodeOfTaxon[x] = leaf;
 		++inserted;
 		if (inserted % 500 == 0) std::cerr << "[builder] inserted " << inserted << " / " << nTaxa
