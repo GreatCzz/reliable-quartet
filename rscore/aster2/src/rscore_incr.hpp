@@ -192,6 +192,59 @@ namespace rscore_incr {
 		}
 	}
 
+	// ---------------- 四色 2-2 计数（NNI 用） ----------------
+	// 直接复用可靠的 F(X,Y)（两趟 DP，支持多叉，无需 resolve）。
+	// 颜色 0..3；三种配对：{0,1}|{2,3}、{0,2}|{1,3}、{0,3}|{1,2}。
+	struct FScratch {
+		vector<ll> c1, a1, m1, G1, H1, c2, a2, m2, G2, H2;
+		void resize(int n) {
+			c1.resize(n); a1.resize(n); m1.resize(n); G1.resize(n); H1.resize(n);
+			c2.resize(n); a2.resize(n); m2.resize(n); G2.resize(n); H2.resize(n);
+		}
+	};
+
+	inline unsigned long long F_colors(GeneTree const& g, vector<unsigned char> const& color,
+		int maskX, int maskY, FScratch& s) {
+		int const n = g.n;
+		ll* c1 = s.c1.data(); ll* a1 = s.a1.data(); ll* m1 = s.m1.data();
+		ll* c2 = s.c2.data(); ll* a2 = s.a2.data(); ll* m2 = s.m2.data();
+		for (int i = n - 1; i >= 0; --i) {
+			int const t = g.taxon[i];
+			if (t >= 0) {
+				unsigned char const col = color[(size_t)t];
+				c1[i] = ((maskX >> col) & 1) ? 1 : 0;
+				c2[i] = ((maskY >> col) & 1) ? 1 : 0;
+				a1[i] = 0; m1[i] = 0; a2[i] = 0; m2[i] = 0;
+			} else {
+				ll C1 = 0, X1 = 0, M1 = 0, C2 = 0, X2 = 0, M2 = 0;
+				for (int c : g.ch[i]) {
+					M1 += m1[c]; M2 += m2[c];
+					if (!g.solid[c]) continue;
+					ll const v1 = c1[c], v2 = c2[c];
+					X1 += C1 * v1; C1 += v1;
+					X2 += C2 * v2; C2 += v2;
+				}
+				c1[i] = C1; a1[i] = X1; m1[i] = X1 + M1;
+				c2[i] = C2; a2[i] = X2; m2[i] = X2 + M2;
+			}
+		}
+		ll const sp = m1[g.root], sq = m2[g.root];
+		if (sp == 0 || sq == 0) return 0;
+		ll* G1 = s.G1.data(); ll* H1 = s.H1.data(); ll* G2 = s.G2.data(); ll* H2 = s.H2.data();
+		G1[g.root] = 0; H1[g.root] = 0; G2[g.root] = 0; H2[g.root] = 0;
+		unsigned long long corr = (unsigned long long)a1[g.root] * (unsigned long long)a2[g.root];
+		for (int i = 0; i < n; ++i) for (int c : g.ch[i]) {
+			if (g.solid[c]) { G1[c] = (c1[i]-c1[c]) + G1[i]; G2[c] = (c2[i]-c2[c]) + G2[i]; }
+			else { G1[c] = 0; G2[c] = 0; }
+			H1[c] = c1[c] * G1[c]; H2[c] = c2[c] * G2[c];
+			corr += (unsigned long long)a1[c]*(unsigned long long)a2[c]
+				+ (unsigned long long)a2[c]*(unsigned long long)H1[c]
+				+ (unsigned long long)a1[c]*(unsigned long long)H2[c];
+		}
+		unsigned long long const total = (unsigned long long)sp * (unsigned long long)sq;
+		return total > corr ? total - corr : 0;
+	}
+
 	// ---------------- ASTER2 colorable 接口 ----------------
 	template<class Attributes> class Color {
 	public:
@@ -208,7 +261,8 @@ namespace rscore_incr {
 			size_t nElements() const noexcept { return genes.size(); }
 		};
 
-		explicit Color(SharedConstData const& data) noexcept : data_(&data), trees_(data.genes.size(), BinaryGene()) {
+		explicit Color(SharedConstData const& data) noexcept : data_(&data), trees_(data.genes.size(), BinaryGene()),
+			quadColor_(data.genes.size(), vector<unsigned char>(data.nTaxa, 0)) {
 			size_t const maxGenes = [&]() -> size_t {
 				const char* e = std::getenv("RSCORE_MAXGENES");
 				return e ? (size_t)std::atoi(e) : data.genes.size();
@@ -221,6 +275,10 @@ namespace rscore_incr {
 		}
 
 		void elementSetTaxonColor(size_t iElement, size_t iTaxon, size_t iColor) noexcept {
+			if (iElement < quadColor_.size()) {
+				if (iTaxon < data_->nTaxa) quadColor_[iElement][iTaxon] = (unsigned char)iColor;
+				if (quadMode_) return;   // 四色模式：只更新颜色，3 色 DP 不动
+			}
 			if (iElement >= trees_.size()) return;
 			auto& b = trees_[iElement];
 			if (b.n == 0) return;
@@ -247,6 +305,8 @@ namespace rscore_incr {
 	private:
 		SharedConstData const* data_;
 		vector<BinaryGene> trees_;
+		vector<vector<unsigned char> > quadColor_;   // 四色模式下每元素每类群的颜色
+		bool quadMode_ = false;
 	};
 
 	class Documentation : public common::DocumentationBase {
