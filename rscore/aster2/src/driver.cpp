@@ -6,6 +6,10 @@
 #include "rscore.hpp"
 namespace my_tool = rscore;
 #else
+#ifdef RSCORE_INCR
+#include "rscore_incr.hpp"
+namespace my_tool = rscore_incr;
+#else
 #ifdef CASTER
 #include "caster.hpp"
 namespace my_tool = caster;
@@ -20,6 +24,7 @@ namespace my_tool = sister;
 #else
 #include "caster.hpp"
 namespace my_tool = caster;
+#endif
 #endif
 #endif
 #endif
