@@ -4,6 +4,10 @@ __pycache__/
 
 # 编译产物
 rscore/solver/solver
+rscore/solver/score
+rscore/solver/builder
+rscore/solver/builder_selftest
+rscore/solver/recombine
 rscore/aster2/bin/
 *.o
 

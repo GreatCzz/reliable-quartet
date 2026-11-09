@@ -11,8 +11,11 @@
 # 1) 编译核心工具（需要 g++ >= 13）
 cd rscore/solver && g++ -std=c++20 -O3 -march=native -fopenmp -I ../aster2/src solver.cpp -o solver && cd ../..
 
-# 2) 给一棵树打分（10000 类群 × 1000 棵树约 2.5 分钟）
-./rscore/rbuild.sh --score submissions/team01_nni_v2.tree rep01.trees.gz 32
+# 2) 仅评分（助教模式）：输出 JSON，含逐基因分数
+./rscore/score.sh -t species.tree -g genes.trees.gz -j 32
+
+# 2b) 给一棵树打分（10000 类群 × 1000 棵树约 5-6 分钟）
+./rscore/rbuild.sh --score submissions/team01_rbuild.tree rep01.trees.gz 32
 # → score = 632996196599254
 
 # 3) 从基因树建树（共识初始化 + NNI，约 40 分钟）

@@ -6,21 +6,21 @@ fail=0
 pass() { echo "  [PASS] $*"; }
 bad()  { echo "  [FAIL] $*"; fail=1; }
 
-echo "== 1/4 编译 solver =="
+echo "== 1/5 编译 solver =="
 if ( cd "$ROOT/rscore/solver" && g++ -std=c++20 -O3 -march=native -fopenmp -I ../aster2/src solver.cpp -o solver ); then
   pass "solver 编译通过"
 else
   bad "solver 编译失败"; exit 1
 fi
 
-echo "== 2/4 打分器对拍（Python 暴力 vs 公式） =="
+echo "== 2/5 打分器对拍（Python 暴力 vs 公式） =="
 if ( cd "$ROOT/scorer" && python3 difftest.py 200 0 >/tmp/verify_difftest.log 2>&1 ); then
   pass "$(tail -1 /tmp/verify_difftest.log)"
 else
   bad "对拍失败（见 /tmp/verify_difftest.log）"
 fi
 
-echo "== 3/4 提交树合法性（叶子/标签/二叉性） =="
+echo "== 3/5 提交树合法性（叶子/标签/二叉性） =="
 python3 - "$ROOT" <<'PYCHECK'
 import glob, sys, os
 root = sys.argv[1]
@@ -78,7 +78,7 @@ sys.exit(0 if ok else 1)
 PYCHECK
 [ $? -eq 0 ] || fail=1
 
-echo "== 4/4 C++ 与 Python 打分一致性（40 类群真实数据） =="
+echo "== 4/5 C++ 与 Python 打分一致性（40 类群真实数据） =="
 if [ -f "$ROOT/rep01.trees.gz" ]; then
   tmp=$(mktemp -d)
   python3 - "$ROOT" "$tmp" <<'PY'
@@ -119,6 +119,25 @@ PY
   rm -rf "$tmp"
 else
   echo "  [SKIP] 没有 rep01.trees.gz"
+fi
+
+echo "== 5/5 仅评分工具（score） =="
+if ( cd "$ROOT/rscore/solver" && g++ -std=c++20 -O3 -march=native -fopenmp -I ../aster2/src score.cpp -o score ); then
+  d=$(mktemp -d)
+  printf '((a,b),(c,d));\n' > "$d/s.tree"
+  printf '((a,b)S,(c,d)S);\n' > "$d/g.trees"
+  out=$("$ROOT/rscore/solver/score" -t "$d/s.tree" -g "$d/g.trees" -q 2>/dev/null || true)
+  sc=$(python3 -c "import json,sys; print(json.loads(sys.argv[1])['score'])" "$out" 2>/dev/null || echo "")
+  if [ "$sc" = "1" ]; then pass "score 编译并给出正确分数（1）"; else bad "score 输出异常: $out"; fi
+  printf '(a,b,c,d);\n' > "$d/poly.tree"
+  if "$ROOT/rscore/solver/score" -t "$d/poly.tree" -g "$d/g.trees" -q >/dev/null 2>&1; then
+    bad "多叉物种树应报错但未报错"
+  else
+    pass "多叉物种树正确报错"
+  fi
+  rm -rf "$d"
+else
+  bad "score 编译失败"
 fi
 
 echo

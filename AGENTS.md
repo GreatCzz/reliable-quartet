@@ -28,6 +28,7 @@ score(S) = Σ_{基因树 g} #{四叶树 q : q 被 S 显示，且在 g 中"可靠
 | `rscore/solver/builder.cpp` | 打分插入构造（`--nosearch` 为顺序毛毛虫） | 构造实验 |
 | `rscore/solver/recombine.cpp` | 三分划并集 DP 重组多棵树 | 重组实验 |
 | `rscore/rbuild.sh` | 一键：共识初始化 → NNI → 打分 | 对外入口 |
+| `rscore/solver/score.cpp` + `rscore/score.sh` | **仅评分模式**（JSON 输出、逐基因分数、输入校验） | 助教用 |
 | `rscore/aster2/` | aster2 工作副本 + `src/rscore.hpp`（把计分接进其迭代框架） | 仅用于中等规模基准，**不是主路径** |
 | `aster1/` | ASTER v1 上游源码（只读参考，不入库，`.gitignore` 已忽略） | 迭代策略参考：多轮放置 + 三分划 DP 重组 |
 | `tools/build_consensus.py` | 簇共识初始化 | 秒级 |
@@ -79,11 +80,12 @@ g++ -std=c++20 -O3 -march=native -fopenmp -I ../aster2/src solver.cpp -o solver
 ./verify.sh        # 见下：构建 + Python 对拍 + 提交树合法性检查
 ```
 
-`verify.sh` 做三件事：
+`verify.sh` 做五件事：
 1. 编译 `solver`；
 2. 跑 `scorer/difftest.py`（随机树对拍，与**无根边枚举**真值比对，几百组）；
 3. 检查 `submissions/*.tree`：10000 叶、**真二叉**（每个内部节点 2 个孩子）、标签 0–9999 齐全唯一；
-4. 40 类群真实数据上 C++ 与 Python 打分一致。
+4. 40 类群真实数据上 C++ 与 Python 打分一致；
+5. 编译并冒烟测试仅评分工具 `score`（含多叉物种树必须报错）。
 
 如果改了打分逻辑，**额外**在 40 类群真实数据上对比 C++ 与 Python 的分数（`verify.sh` 里已包含小规模版本）。
 
