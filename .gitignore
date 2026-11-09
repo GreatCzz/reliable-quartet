@@ -5,6 +5,7 @@ __pycache__/
 # 编译产物
 rscore/solver/solver
 rscore/solver/score
+rscore/solver/score_fast
 rscore/solver/builder
 rscore/solver/builder_selftest
 rscore/solver/recombine

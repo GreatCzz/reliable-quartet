@@ -76,6 +76,9 @@ g++ -std=c++20 -O3 -march=native -fopenmp -I ../aster2/src solver.cpp -o solver
 ./rscore/score.sh -t est.tree -g genes.trees[.gz] [-j 32] [-q]
 ```
 
+默认使用**快速后端**（`score_fast`，源自导师的 `solution_fast.cpp`，约 100× 加速）；
+`--ref` 用我们自己的参考实现，`--verify` 同时跑两者并比对（不一致时退出码 3）。
+
 输出一行 JSON（stdout）：
 
 ```json
@@ -103,7 +106,10 @@ g++ -std=c++20 -O3 -march=native -fopenmp -I ../aster2/src solver.cpp -o solver
 **边界语义**：分数只统计"物种树与基因树共有类群"构成的四叶树；缺失类群、多余类群都不会被静默计入。
 
 > 不想用脚本包装时，也可以直接调用二进制（需自行解压 `.gz`）：
-> `./rscore/solver/score -t est.tree -g genes.trees`
+> `./rscore/solver/score_fast -t est.tree -g genes.trees`（快）
+> `./rscore/solver/score -t est.tree -g genes.trees`（参考实现，慢但独立验证过）
+
+**性能**：10000 类群 × 1000 棵树，快后端约 **5 秒**，参考实现约 **6 分钟**（32 线程）。
 
 ## 4. 输入格式
 

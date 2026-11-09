@@ -126,6 +126,8 @@ struct SpeciesTree {
 };
 
 // 返回空字符串表示成功，否则为错误信息。
+// 约定：物种树按"有根二叉"评分；唯一例外是**根有 3 个孩子**——这是无根二叉树的
+// 常规 Newick 表示（根处三叉），此时把后两个孩子合并成一个新节点（不改变无根拓扑，分数不变）。
 string buildSpecies(newick::Newick::Node const* const root, size_t nTaxa, SpeciesTree& t) {
 	vector<newick::Newick::Node const*> order, st{ root };
 	while (!st.empty()) { auto* u = st.back(); st.pop_back(); order.push_back(u);
@@ -133,7 +135,10 @@ string buildSpecies(newick::Newick::Node const* const root, size_t nTaxa, Specie
 	std::unordered_map<newick::Newick::Node const*, int> id;
 	id.reserve(order.size() * 2);
 	for (size_t i = 0; i < order.size(); ++i) id[order[i]] = (int)i;
-	t.n = (int)order.size();
+
+	bool const rootTrifurcation = (root->children.size() == 3);
+	int const synth = (int)order.size();          // 合成节点（仅在根三叉时使用）
+	t.n = (int)order.size() + (rootTrifurcation ? 1 : 0);
 	t.par.assign(t.n, -1); t.c0.assign(t.n, -1); t.c1.assign(t.n, -1); t.taxon.assign(t.n, -1);
 	t.root = 0;
 	t.W = (nTaxa + 63) / 64;
@@ -146,6 +151,12 @@ string buildSpecies(newick::Newick::Node const* const root, size_t nTaxa, Specie
 			if (u->name.empty()) return "species tree has an empty leaf label";
 			if (!seen.insert(u->name).second) return "duplicate leaf label in species tree: " + u->name;
 			t.taxon[i] = (int)common::taxonName2ID[u->name];
+		} else if (rootTrifurcation && i == 0) {
+			t.c0[0] = id[u->children[0]];
+			t.c1[0] = synth;
+			t.par[t.c0[0]] = 0;
+			t.par[synth] = 0;
+			t.internal.push_back(0);
 		} else {
 			if (u->children.size() != 2)
 				return "species tree must be binary (node with " + std::to_string(u->children.size())
@@ -156,6 +167,13 @@ string buildSpecies(newick::Newick::Node const* const root, size_t nTaxa, Specie
 			t.par[t.c1[i]] = (int)i;
 			t.internal.push_back((int)i);
 		}
+	}
+	if (rootTrifurcation) {
+		t.c0[synth] = id[root->children[1]];
+		t.c1[synth] = id[root->children[2]];
+		t.par[t.c0[synth]] = synth;
+		t.par[t.c1[synth]] = synth;
+		t.internal.push_back(synth);
 	}
 	for (int i = t.n - 1; i >= 0; --i) {
 		u64* const dst = t.bits.data() + (size_t)i * t.W;

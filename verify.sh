@@ -121,7 +121,7 @@ else
   echo "  [SKIP] 没有 rep01.trees.gz"
 fi
 
-echo "== 5/5 仅评分工具（score） =="
+echo "== 5/5 仅评分工具（score + score_fast） =="
 if ( cd "$ROOT/rscore/solver" && g++ -std=c++20 -O3 -march=native -fopenmp -I ../aster2/src score.cpp -o score ); then
   d=$(mktemp -d)
   printf '((a,b),(c,d));\n' > "$d/s.tree"
@@ -134,6 +134,12 @@ if ( cd "$ROOT/rscore/solver" && g++ -std=c++20 -O3 -march=native -fopenmp -I ..
     bad "多叉物种树应报错但未报错"
   else
     pass "多叉物种树正确报错"
+  fi
+  if ( cd "$ROOT/rscore/solver" && g++ -std=c++20 -O3 -march=native -fopenmp score_fast.cpp -o score_fast ); then
+    f=$("$ROOT/rscore/solver/score_fast" -t "$d/s.tree" -g "$d/g.trees" -q 2>/dev/null | python3 -c "import json,sys;print(json.load(sys.stdin)['score'])" 2>/dev/null || echo "")
+    if [ "$f" = "1" ]; then pass "score_fast 与 score 一致（1）"; else bad "score_fast 输出异常: $f"; fi
+  else
+    bad "score_fast 编译失败"
   fi
   rm -rf "$d"
 else
