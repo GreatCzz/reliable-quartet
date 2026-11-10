@@ -156,11 +156,11 @@ sys.path.insert(0, os.path.join(root, 'scorer'))
 from ref_brute import parse_newick
 from test_utils import restrict_tree, render
 with gzip.open(os.path.join(root, 'rep01.trees.gz'), 'rt') as f:
-    lines = [l.strip() for l in f if l.strip()][:6]
+    lines = [l.strip() for l in f if l.strip()][:30]
 pat = re.compile(r'(?<=[(,])(\d+)(?=[,)])')
 common = set.intersection(*[set(pat.findall(l)) for l in lines])
 rng = random.Random(1)
-taxa = sorted(rng.sample(sorted(common), 24))
+taxa = sorted(rng.sample(sorted(common), 40))
 out = []
 for l in lines:
     ch, lab, nm, par, rt = parse_newick(l)
