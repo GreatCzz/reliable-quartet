@@ -146,6 +146,46 @@ else
   bad "score 编译失败"
 fi
 
+echo "== 6/6 增量 NNI（nni_incr） =="
+if ( cd "$ROOT/rscore/solver" && g++ -std=c++20 -O3 -march=native -fopenmp nni_incr.cpp -o nni_incr ); then
+  d=$(mktemp -d)
+  python3 - "$ROOT" "$d" <<'PY'
+import gzip, random, re, sys, os
+root, tmp = sys.argv[1], sys.argv[2]
+sys.path.insert(0, os.path.join(root, 'scorer'))
+from ref_brute import parse_newick
+from test_utils import restrict_tree, render
+with gzip.open(os.path.join(root, 'rep01.trees.gz'), 'rt') as f:
+    lines = [l.strip() for l in f if l.strip()][:6]
+pat = re.compile(r'(?<=[(,])(\d+)(?=[,)])')
+common = set.intersection(*[set(pat.findall(l)) for l in lines])
+rng = random.Random(1)
+taxa = sorted(rng.sample(sorted(common), 24))
+out = []
+for l in lines:
+    ch, lab, nm, par, rt = parse_newick(l)
+    nc, nl, nn, nr = restrict_tree(ch, lab, nm, rt, set(taxa))
+    out.append(render(nc, nl, nn, nr) + ";")
+open(os.path.join(tmp, 'g.trees'), 'w').write("\n".join(out) + "\n")
+def rnd(items):
+    if len(items) == 1: return items[0]
+    rng.shuffle(items); k = len(items)//2
+    return "(" + rnd(items[:k]) + "," + rnd(items[k:]) + ")"
+open(os.path.join(tmp, 's.tree'), 'w').write(rnd(taxa[:]) + ";\n")
+PY
+  inc=$("$ROOT/rscore/solver/nni_incr" -s "$d/s.tree" -i "$d/g.trees" -t 4 --score 2>/dev/null | tail -1)
+  sf=$("$ROOT/rscore/solver/score_fast" -t "$d/s.tree" -g "$d/g.trees" -j 4 -q 2>/dev/null | python3 -c "import json,sys;print(json.load(sys.stdin)['score'])" 2>/dev/null || echo "")
+  if [ "$inc" = "$sf" ] && [ -n "$inc" ]; then pass "nni_incr 初始分 == score_fast（$inc）"; else bad "nni_incr=$inc != score_fast=$sf"; fi
+  if "$ROOT/rscore/solver/nni_incr" -s "$d/s.tree" -i "$d/g.trees" -t 4 --check 6 >/dev/null 2>&1; then
+    pass "增量 Δ 与从零重算逐值一致"
+  else
+    bad "增量对拍失败（--check）"
+  fi
+  rm -rf "$d"
+else
+  bad "nni_incr 编译失败"
+fi
+
 echo
 if [ $fail -eq 0 ]; then echo "全部通过 ✅"; else echo "存在失败项 ❌"; fi
 exit $fail

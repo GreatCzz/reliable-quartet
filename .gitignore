@@ -9,6 +9,8 @@ rscore/solver/score_fast
 rscore/solver/builder
 rscore/solver/builder_selftest
 rscore/solver/recombine
+rscore/solver/nni_incr
+rscore/solver/incr_dp
 rscore/aster2/bin/
 *.o
 
