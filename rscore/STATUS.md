@@ -28,3 +28,21 @@
 - `/tmp/astral_best_sofar.tree`：ASTRAL 中途树（1000 类群，19.45e9）；
 - `/tmp/incr1000.tree`：框架放置树（19.91e9）；
 - 全量数据 `/tmp/rep01.trees`（重启后需重新 zcat）。
+
+## 2026-11-10 晚：慢速放置求解器 `placer`（未完成验证）
+
+- 新增 `rscore/solver/fastscore.hpp`（把导师快速 DP 抽成可复用头文件，含物种树版本号刷新）
+  与 `rscore/solver/placer.cpp`（整树评估 + 打分放置；每个候选都实际插树并整树重算）。
+- 编译：`g++ -std=c++20 -O3 -march=native -fopenmp placer.cpp -o placer`
+- 用法：`./placer -i genes.trees -o out.tree -t N --genes K --cand C --backbone B [--order rand --seed S]`
+- 500 类群实测（100 棵树）：
+  - genes=20, cand=6, backbone=100：21 s → 初始 1.708e9，NNI 后 2.226e9
+  - genes=100, cand=16, backbone=200：254 s → 初始 1.763e9，NNI 后 2.223e9
+  - 对照：builder+NNI 2.36e9；框架+NNI 2.53e9
+- **结论**：工具可用但与 builder 相比没有优势；下一步应改"候选生成/骨架"，而不是继续加基因数。
+- 全量成本估算：10000 类群 × (B + (n-B)×C) 次评估 × 每次 ~0.07 s（100 棵，32 线程）→ 数小时。
+
+## 2026-11-10：rep21/rep13 评分（同 rep01 数据对比）
+
+- rep21（用 rep01 数据）：1,717,552,543,716,657（比我们高 **+7.44%**）
+- rep13：1,598,699,121,224,529（与我们 1.5986e15 基本持平）
