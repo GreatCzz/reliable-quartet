@@ -26,7 +26,8 @@ using std::size_t; using std::string; using std::vector;
 using u64 = std::uint64_t; using i64 = long long;
 
 struct GeneTree {
-	vector<int> start, kids; vector<char> solid; vector<int> taxon; int root = 0, n = 0;
+	vector<int> start, kids, parent, representative, siblingRepresentative;
+	vector<char> solid; vector<int> taxon; int root = 0, n = 0;
 };
 
 GeneTree buildGene(newick::Newick::Node const* const root) {
@@ -43,10 +44,43 @@ GeneTree buildGene(newick::Newick::Node const* const root) {
 	g.taxon.assign(g.n, -1);
 	for (size_t i = 0; i < order.size(); ++i) g.start[i+1] = g.start[i] + (int)order[i]->children.size();
 	g.kids.reserve(g.start[g.n]);
+	g.parent.assign(g.n, -1);
 	for (size_t i = 0; i < order.size(); ++i) {
 		auto* u = order[i];
 		if (u->children.empty()) g.taxon[i] = (int)common::taxonName2ID[u->name];
-		else for (auto* c : u->children) { int cid = id[c]; g.kids.push_back(cid); g.solid[cid] = (c->name == "D") ? 0 : 1; }
+		else for (auto* c : u->children) {
+			int const cid = id[c];
+			g.kids.push_back(cid);
+			g.parent[cid] = (int)i;
+			g.solid[cid] = (c->name == "D") ? 0 : 1;
+		}
+	}
+	g.representative.assign(g.n, -1);
+	for (int i = g.n - 1; i >= 0; --i) {
+		if (g.taxon[i] >= 0) g.representative[i] = g.taxon[i];
+		else for (int k = g.start[i + 1] - 1; k >= g.start[i]; --k) {
+			int const child = g.kids[k];
+			if (g.representative[child] >= 0) {
+				g.representative[i] = g.representative[child];
+				break;
+			}
+		}
+	}
+	g.siblingRepresentative.assign(g.n, -1);
+	for (int p = 0; p < g.n; ++p) {
+		int firstChild = -1, secondChild = -1;
+		for (int k = g.start[p]; k < g.start[p + 1]; ++k) {
+			int const child = g.kids[k];
+			if (g.representative[child] < 0) continue;
+			if (firstChild < 0) firstChild = child;
+			else if (secondChild < 0) secondChild = child;
+		}
+		for (int k = g.start[p]; k < g.start[p + 1]; ++k) {
+			int const child = g.kids[k];
+			if (g.representative[child] < 0) continue;
+			int const sibling = (child == firstChild) ? secondChild : firstChild;
+			if (sibling >= 0) g.siblingRepresentative[child] = g.representative[sibling];
+		}
 	}
 	g.root = 0;
 	return g;
@@ -375,6 +409,59 @@ int commitInsertion(DynTree& S, int p, int x, vector<u64>& activeMask,
 	return leaf;
 }
 
+vector<int> makeCandidates(DynTree const& S, vector<int> const& anchorPool,
+	int legacyAnchor, vector<int> const& nodeOfTaxon, int anchorCount,
+	int pathLen, int siblingDepth, int maxCandidates,
+	bool fullScan, bool nosearch) {
+	vector<int> cands;
+	if (nosearch) {
+		cands.push_back(S.root);
+		return cands;
+	}
+	if (fullScan) {
+		for (int v = 0; v < S.n; ++v) cands.push_back(v);
+		return cands;
+	}
+
+	vector<int> activeAnchors;
+	auto addActive = [&](int a) {
+		if (a < 0 || a >= (int)nodeOfTaxon.size() || nodeOfTaxon[(size_t)a] < 0) return;
+		if (std::find(activeAnchors.begin(), activeAnchors.end(), a) == activeAnchors.end())
+			activeAnchors.push_back(a);
+	};
+	if (anchorCount <= 1) addActive(legacyAnchor);
+	else for (int a : anchorPool) {
+		addActive(a);
+		if ((int)activeAnchors.size() >= anchorCount) break;
+	}
+	if (activeAnchors.empty()) activeAnchors.push_back(-1);
+
+	for (int anchor : activeAnchors) {
+		int v = (anchor >= 0) ? nodeOfTaxon[(size_t)anchor] : S.root;
+		for (int step = 0; step < pathLen && v >= 0; ++step) {
+			cands.push_back(v);
+			if (step < siblingDepth && S.par[v] >= 0) {
+				int const p = S.par[v];
+				int const sibling = (S.c0[p] == v) ? S.c1[p] : S.c0[p];
+				if (sibling >= 0) cands.push_back(sibling);
+			}
+			v = S.par[v];
+		}
+	}
+
+	vector<char> seen(S.n, 0);
+	vector<int> unique;
+	unique.reserve(cands.size());
+	for (int p : cands) if (p >= 0 && p < S.n && !seen[p]) {
+		seen[p] = 1;
+		unique.push_back(p);
+	}
+	if (unique.empty()) unique.push_back(S.root);
+	if (maxCandidates > 0 && (int)unique.size() > maxCandidates)
+		unique.resize((size_t)maxCandidates);
+	return unique;
+}
+
 string toNewick(DynTree const& S, int u) {
 	if (S.taxon[u] >= 0) return common::taxonName2ID[(size_t)S.taxon[u]];
 	return "(" + toNewick(S, S.c0[u]) + "," + toNewick(S, S.c1[u]) + ")";
@@ -386,6 +473,7 @@ string toNewick(DynTree const& S, int u) {
 int main(int argc, char** argv) {
 	string inFile, outFile, seedOrder;
 	int threads = 8, budget = 300, cand = 10, Tgenes = 8, orderMode = 0;
+	int anchors = 1, maxCandidates = 0, exploreEvery = 0, siblingDepth = 0;
 	bool nosearch = false;
 	long seed = -1;
 	for (int i = 1; i < argc; ++i) {
@@ -397,10 +485,19 @@ int main(int argc, char** argv) {
 		else if (s == "--budget") budget = std::stoi(nx());
 		else if (s == "--cand") cand = std::stoi(nx());
 		else if (s == "--genes") Tgenes = std::stoi(nx());
+		else if (s == "--anchors") anchors = std::max(1, std::stoi(nx()));
+		else if (s == "--max-candidates") maxCandidates = std::max(0, std::stoi(nx()));
+		else if (s == "--sibling-depth") siblingDepth = std::max(0, std::stoi(nx()));
+		else if (s == "--siblings") siblingDepth = std::max(1, siblingDepth);
+		else if (s == "--explore-every") exploreEvery = std::max(0, std::stoi(nx()));
 		else if (s == "--nosearch") nosearch = true;
 		else if (s == "--seed") seed = std::stol(nx());
 	}
-	if (inFile.empty()) { std::cerr << "usage: builder -i genes.trees -o out.tree [-t N] [--budget B] [--cand C] [--genes K]" << std::endl; return 2; }
+	if (inFile.empty()) { std::cerr << "usage: builder -i genes.trees -o out.tree [-t N] [--budget B] [--cand C] [--genes K] [--anchors K] [--sibling-depth D] [--explore-every K] [--max-candidates M]" << std::endl; return 2; }
+	if (threads < 1 || budget < 1 || cand < 1 || Tgenes < 1) {
+		std::cerr << "Error: -t, --budget, --cand and --genes must be positive" << std::endl;
+		return 2;
+	}
 
 	vector<GeneTree> genes;
 	{
@@ -428,26 +525,18 @@ int main(int argc, char** argv) {
 		std::shuffle(order.begin(), order.end(), rng);
 	}
 
-	// 事件：每个类群在"某棵基因树"里的初始锚点（父节点内另一个叶子），用于候选生成
-	vector<int> anchorTaxon(nTaxa, -1);
-	for (size_t x = 0; x < nTaxa; ++x) {
-		for (auto const& g : genes) {
-			// 找到 x 的父节点，取父节点子树里另一个叶子
-			int node = -1;
-			for (int u = 0; u < g.n; ++u) if (g.taxon[u] == (int)x) { node = u; break; }
-			if (node < 0) continue;
-			int p = -1;
-			for (int u = 0; u < g.n && p < 0; ++u) for (int k = g.start[u]; k < g.start[u+1]; ++k) if (g.kids[k] == node) { p = u; break; }
-			if (p < 0) continue;
-			for (int k = g.start[p]; k < g.start[p+1]; ++k) {
-				int c = g.kids[k];
-				if (c == node) continue;
-				int cand2 = -1;
-				vector<int> st{ c };
-				while (!st.empty() && cand2 < 0) { int u = st.back(); st.pop_back(); if (g.taxon[u] >= 0) cand2 = g.taxon[u]; else for (int kk = g.start[u]; kk < g.start[u+1]; ++kk) st.push_back(g.kids[kk]); }
-				if (cand2 >= 0) { anchorTaxon[x] = cand2; break; }
-			}
-			if (anchorTaxon[x] >= 0) break;
+	// Anchor 索引单次遍历所有叶，代表叶已在 buildGene 中预计算。
+	vector<int> legacyAnchorTaxon(nTaxa, -1);
+	vector<vector<int>> anchorTaxa(nTaxa);
+	for (auto const& g : genes) for (int node = 0; node < g.n; ++node) {
+		int const x = g.taxon[node];
+		if (x < 0 || g.parent[node] < 0) continue;
+		int const a = g.siblingRepresentative[node];
+		if (a < 0 || a == x || a >= (int)nTaxa) continue;
+		if (legacyAnchorTaxon[(size_t)x] < 0) legacyAnchorTaxon[(size_t)x] = a;
+		if (anchors > 1) {
+			vector<int>& dst = anchorTaxa[(size_t)x];
+			if (std::find(dst.begin(), dst.end(), a) == dst.end()) dst.push_back(a);
 		}
 	}
 
@@ -480,32 +569,11 @@ int main(int argc, char** argv) {
 			continue;
 		}
 
-		// 候选位置集合
-		vector<int> cands;
-		if (nosearch) {
-			cands.push_back(S.root);          // 直接挂到根：O(1) 插入，复现"顺序毛毛虫"
-		} else if (inserted < budget) {
-			for (int v = 0; v < S.n; ++v) cands.push_back(v);
-		} else {
-			int anchor = anchorTaxon[x];
-			int v = (anchor >= 0) ? nodeOfTaxon[anchor] : S.root;
-			if (v < 0) v = S.root;
-			for (int step = 0; step < cand && v >= 0; ++step) { cands.push_back(v); v = S.par[v]; }
-			// 锚点的兄弟孩子
-			// （略：路径已覆盖大部分情况）
-		}
-
-		// 候选来源扩展后仍保持稳定的首选顺序，并避免重复位置并行写入。
-		{
-			vector<char> seen(S.n, 0);
-			vector<int> unique;
-			unique.reserve(cands.size());
-			for (int p : cands) if (!seen[p]) {
-				seen[p] = 1;
-				unique.push_back(p);
-			}
-			cands.swap(unique);
-		}
+		bool const fullScan = inserted < budget
+			|| (exploreEvery > 0 && inserted % exploreEvery == 0);
+		vector<int> cands = makeCandidates(S, anchorTaxa[(size_t)x],
+			legacyAnchorTaxon[(size_t)x], nodeOfTaxon, anchors, cand,
+			siblingDepth, maxCandidates, fullScan, nosearch);
 
 		// 评估：先一次计算所有旧节点的三个方向增量，再 O(1) 得到候选总增量。
 		vector<u64> bX(W, 0), activePlusX = activeMask;

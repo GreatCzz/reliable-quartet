@@ -146,4 +146,32 @@
 1. 对每个旧内部节点 `v` 一次算出 `dA/dB/dC`，分别表示插入叶 `x` 到左子簇、右子簇、外部补集时该节点 `W` 的变化；候选位置新增节点另算 `N[p]`。
 2. 令 `base = Σ_v dC[v]`，沿树传播 `prefix[child] = prefix[parent] + dDirection[parent] - dC[parent]`，候选总增量为 `base + prefix[p] + N[p]`。
 3. 提交前保存最佳候选到根的旧方向；旧节点缓存先加 `dC`，严格祖先再修正到对应 `dA/dB`。新内部节点直接设为 `N[p]`，不再全量重建缓存。
-4. 旧 `candidateDelta` 与全量缓存刷新保留在 selftest 中作为 oracle。DSU 重着色以及通用 batch placement DP 暂不进入生产路径。
+
+## 13. Builder 第二阶段：候选扩展实验（2026-11-10）
+
+第一阶段批量增量后，第二阶段先扩展候选集合，不改评分 kernel。`builder.cpp` 新增显式参数：
+
+- `--anchors K`：受限阶段使用的不同 anchor 数；默认 `1`，保持第一阶段行为；`K>1` 时从所有 gene tree 收集去重 sibling 代表叶。
+- `--sibling-depth D`：沿每个 anchor 路径前 `D` 层加入另一孩子；默认 `0`。`--siblings` 作为兼容别名等价于至少 `D=1`。
+- `--max-candidates M`：去重后候选总数上限；默认 `0` 表示不限。
+- `--explore-every K`：每隔 K 个已插入 taxon 临时使用全部节点候选；默认 `0` 关闭。
+
+候选位置仍表示“把新叶插在节点 p 上方”；所有候选先去重，再调用已验证的
+`base + prefix[p] + newNode[p]` 精确增量。未激活 anchor 会被跳过，无有效 anchor 时才回退 root。
+默认 `anchors=1,sibling-depth=0` 保留旧单 anchor 的代表叶顺序，因此输出兼容第一阶段。anchor 预处理现为每棵 gene tree 一次线性 parent/代表 sibling 遍历，不再按 taxon 重扫整棵树。默认 500 taxa builder 重跑耗时 2.27 s，输出 SHA-256 与第一阶段树完全相同（`1b086775e6eabffa6c9d9cadb5573c31a3d7a36b089e27de166a43629e1e354f`）。selftest 单独覆盖旧候选顺序、未激活 anchor、候选去重、sibling-depth、候选 cap、root fallback、`--nosearch` 和 full-scan。
+
+### 500 taxa × 100 genes 单变量试验
+
+固定输入 `rscore/results/baseline500_g.trees`、8 线程、`--budget 60 --genes 4`，初始分数用全部 100 棵 gene tree 重算，随后统一运行最多 40 轮全量 NNI：
+
+| 模式 | builder 初始分 | NNI 后分数 | builder 时间 |
+|---|---:|---:|---:|
+| 默认 `anchors=1,cand=4` | 1,747,614,212 | **2,357,934,671** | 2.27 s |
+| `anchors=2,cand=4,max-candidates=8` | 1,788,761,697 | 2,331,819,221 | 2.32 s |
+| `anchors=4,cand=4,max-candidates=16` | 1,801,834,518 | 2,339,128,131 | 2.38 s |
+| `sibling-depth=1,max-candidates=8` | 1,747,614,212 | **2,357,934,671** | 2.66 s |
+| 全候选（`budget=10000`） | 1,806,096,724 | 2,350,237,946 | 3.79 s |
+
+结论：多 anchor 和全边探索提高了 builder 初始分，但在当前确定性 NNI 邻域中进入了较差盆地；
+因此它们**不晋级为默认策略**，仅保留为可重复实验开关。`sibling-depth=1` 在该控制集上没有改变结果。
+下一步应优先做候选 recall/regret 记录或多起点/SPR，而不是继续盲目扩大候选。

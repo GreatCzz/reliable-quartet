@@ -117,6 +117,53 @@ long long bruteOfficialScore(DynTree const& tree, vector<BruteGene> const& genes
     return score;
 }
 
+void checkCandidateGeneration() {
+    DynTree tree;
+    tree.W = 1;
+    insertFirstTaxon(tree, 0);
+    insertSecondTaxon(tree, 1);
+    vector<u64> active(1, 0b11);
+    int const leaf0 = 1;
+    int const leaf1 = 2;
+    vector<int> nodeOfTaxon(6, -1);
+    nodeOfTaxon[0] = leaf0;
+    nodeOfTaxon[1] = leaf1;
+    nodeOfTaxon[2] = -1; // 未激活 anchor 必須跳过。
+
+    vector<int> pool{2, 0, 1, 0};
+    auto got = makeCandidates(tree, pool, 0, nodeOfTaxon, 2, 4, 0, 0, false, false);
+    vector<int> expected{leaf0, tree.root};
+    if (got != expected) {
+        cerr << "candidate anchor activation/order mismatch\\n";
+        exit(1);
+    }
+    got = makeCandidates(tree, pool, 0, nodeOfTaxon, 4, 4, 1, 0, false, false);
+    if (got.size() != (size_t)tree.n) {
+        cerr << "candidate dedup/sibling generation mismatch\\n";
+        exit(1);
+    }
+    got = makeCandidates(tree, pool, 0, nodeOfTaxon, 4, 4, 1, 1, false, false);
+    if (got.size() != 1 || got[0] != leaf0) {
+        cerr << "candidate cap/order mismatch\\n";
+        exit(1);
+    }
+    got = makeCandidates(tree, vector<int>{2}, -1, nodeOfTaxon, 4, 4, 0, 0, false, false);
+    if (got.size() != 1 || got[0] != tree.root) {
+        cerr << "root fallback mismatch\\n";
+        exit(1);
+    }
+    got = makeCandidates(tree, pool, 0, nodeOfTaxon, 4, 4, 1, 0, false, true);
+    if (got.size() != 1 || got[0] != tree.root) {
+        cerr << "nosearch candidate mismatch\\n";
+        exit(1);
+    }
+    got = makeCandidates(tree, pool, 0, nodeOfTaxon, 4, 4, 0, 0, true, false);
+    if (got.size() != (size_t)tree.n) {
+        cerr << "full-scan candidate mismatch\\n";
+        exit(1);
+    }
+}
+
 void checkBits(DynTree const& tree) {
     vector<u64> expected((size_t)tree.n * tree.W, 0);
     function<void(int)> visit = [&](int u) {
@@ -149,6 +196,7 @@ void checkBits(DynTree const& tree) {
 } // namespace
 
 int main() {
+    checkCandidateGeneration();
     vector<string> lines = {
         "((t0,t1)S,(t2,t3)S,(t4,t5)D,(t6,t7)S,(t8,t9)S);",
         "((t0,t2)D,(t1,t4)S,(t3,t6)D,(t5,t8)S,t9);",
