@@ -242,6 +242,9 @@ string toNewick(SpeciesTree const& t, int u) {
 struct Args {
 	string species, input, output;
 	int threads = 8, rounds = 50, iters = 2000;
+	double target = 0.0;   // >0：只从"贡献最低的 target 比例"节点里采样 x
+	int screen = 0;        // >0：先用 screen 棵树筛选移动，通过后再用全部树确认
+	int localDepth = 0;    // >0：v 优先在 x 原位置附近 localDepth 条边内选（局部 SPR）
 	long long seed = 1;
 	bool verbose = false;
 };
@@ -258,6 +261,9 @@ Args parseArgs(int argc, char** argv) {
 		else if (s == "--rounds") a.rounds = std::stoi(next());
 		else if (s == "--iters") a.iters = std::stoi(next());
 		else if (s == "--seed") a.seed = std::stoll(next());
+		else if (s == "--target") a.target = std::stod(next());
+		else if (s == "--screen") a.screen = std::stoi(next());
+		else if (s == "--local") a.localDepth = std::stoi(next());
 		else if (s == "-v") a.verbose = true;
 		else { std::cerr << "unknown arg " << s << std::endl; std::exit(2); }
 	}
@@ -336,16 +342,38 @@ int main(int argc, char** argv) {
 	vector<i64> newW(T);
 
 	vector<char> mark((size_t)S.n, 0);
+	vector<int> allGenes((size_t)T), screenGenes;
+	for (int i = 0; i < T; ++i) allGenes[(size_t)i] = i;
+	if (args.screen > 0 && args.screen < T) {
+		int const stride = std::max(1, T / args.screen);
+		for (int i = 0; i < T; i += stride) screenGenes.push_back(i);
+	}
 
+	vector<std::pair<i64,int>> pool;
 	for (int round = 1; round <= args.rounds; ++round) {
 		i64 gain = 0;
 		int accepted = 0;
+		if (args.target > 0.0) {
+			pool.clear();
+			for (int k = 0; k < K; ++k) {
+				int const v = S.internal[(size_t)k];
+				if (S.sz[v] < 2 || S.sz[v] > (int)nTaxa - 2) continue;
+				i64 c = 0;
+				i64 const* const row = cache.data() + (size_t)k * T;
+				for (int g = 0; g < T; ++g) c += row[g];
+				pool.emplace_back(c, v);
+			}
+			std::sort(pool.begin(), pool.end());
+			size_t const keep = std::max<size_t>(1, (size_t)((double)pool.size() * args.target));
+			pool.resize(keep);
+		}
 		auto ts = std::chrono::steady_clock::now();
 		for (int it = 0; it < args.iters; ++it) {
 			if (getenv("SPR_DEBUG")) std::cerr << "it=" << it << " ";
-			// ---- 1) 选子树 x
-			int const kx = (int)(rng() % (u64)K);
-			int const x = S.internal[(size_t)kx];
+			// ---- 1) 选子树 x（--target>0 时从低贡献池里选）
+			int x;
+			if (args.target > 0.0 && !pool.empty()) x = pool[(size_t)(rng() % (u64)pool.size())].second;
+			else x = S.internal[(size_t)(rng() % (u64)K)];
 			if (S.sz[x] < 2 || S.sz[x] > (int)nTaxa - 2) continue;
 			int const p = S.par[x];
 			if (p < 0) continue;
@@ -359,9 +387,11 @@ int main(int argc, char** argv) {
 			vector<u64> savedBits;
 			vector<int> savedSz;
 			vector<char> saveMark((size_t)S.n, 0);
+			vector<int> saveIdx((size_t)S.n, -1);
 			auto saveNode = [&](int z) {
 				if (z < 0 || saveMark[(size_t)z]) return;
 				saveMark[(size_t)z] = 1;
+				saveIdx[(size_t)z] = (int)savedNodes.size();
 				size_t const at = savedBits.size();
 				savedBits.resize(at + S.W);
 				memcpy(savedBits.data() + at, S.bits.data() + (size_t)z * S.W, S.W * sizeof(u64));
@@ -401,7 +431,29 @@ int main(int argc, char** argv) {
 
 			// ---- 4) 选重挂点 v（不在 subtree(x) 里，且不是 p/ x）
 			int v = -1;
-			for (int attempt = 0; attempt < 80; ++attempt) {
+			if (args.localDepth > 0 && g >= 0) {
+				// BFS 收集 g 附近 localDepth 条边内的节点
+				vector<int> nb; nb.push_back(g);
+				for (int d = 0, head = 0; d < args.localDepth && head < (int)nb.size(); ++d) {
+					int const tail = (int)nb.size();
+					for (; head < tail; ++head) {
+						int const z = nb[(size_t)head];
+						if (S.c0[z] >= 0) { nb.push_back(S.c0[z]); nb.push_back(S.c1[z]); }
+						if (S.par[z] >= 0) nb.push_back(S.par[z]);
+					}
+				}
+				std::shuffle(nb.begin(), nb.end(), rng);
+				for (int cand : nb) {
+					if (cand == p || cand == x) continue;
+					u64 const* const bc = S.bits.data() + (size_t)cand * S.W;
+					u64 const* const bx = S.bits.data() + (size_t)x * S.W;
+					bool inX = true;
+					for (size_t w = 0; w < S.W; ++w) if ((bc[w] & bx[w]) != bc[w]) { inX = false; break; }
+					if (inX) continue;
+					v = cand; break;
+				}
+			}
+			for (int attempt = 0; attempt < 80 && v < 0; ++attempt) {
 				int const cand = (int)(rng() % (u64)S.n);
 				if (cand == p || cand == x) continue;
 				u64 const* const bc = S.bits.data() + (size_t)cand * S.W;
@@ -467,39 +519,49 @@ int main(int argc, char** argv) {
 			for (int z : path2) push(z);
 			push(w0);
 
-			// ---- 7) 重算 W 并累加 delta
-			i64 delta = 0;
-			for (int z : affected) {
-				int const kz = idx[(size_t)z];
-				int const a = S.c0[z], b = S.c1[z];
-				if (a < 0 || b < 0) continue;
-				u64 const* const bA = S.bits.data() + (size_t)a * S.W;
-				u64 const* const bB = S.bits.data() + (size_t)b * S.W;
-				int const sC = (int)nTaxa - S.sz[a] - S.sz[b];
-				#pragma omp parallel for schedule(dynamic) num_threads(P)
-				for (int gi = 0; gi < T; ++gi) {
-					Scratch& sc = scratch[omp_get_thread_num()];
-					for (size_t wi = 0; wi < S.W; ++wi) sc.t1[wi] = ~(bA[wi] | bB[wi]);
-					newW[gi] = Wnode(genes[gi], bA, bB, sc.t1.data(), S.sz[a], S.sz[b], sC, S.W, sc);
-				}
-				for (int gi = 0; gi < T; ++gi) delta += newW[gi] - cache[(size_t)kz * T + gi];
-			}
-			delta /= 2;
-
-			if (delta > 0) {
-				for (int z : affected) {
-					int const kz = idx[(size_t)z];
+			for (int z : affected) mark[(size_t)z] = 0;   // 去重完成，清标记
+			// ---- 7) 评估：单个并行区处理 (受影响节点 × 基因)
+			std::vector<i64> fullW;
+			auto evalMove = [&](vector<int> const& glist, std::vector<i64>* outW) -> i64 {
+				size_t const nn = affected.size(), GG = glist.size();
+				if (outW) outW->assign(nn * GG, 0);
+				i64 d = 0;
+				long long const total_pairs = (long long)(nn * GG);
+				#pragma omp parallel for schedule(dynamic) num_threads(P) reduction(+:d)
+				for (long long t = 0; t < total_pairs; ++t) {
+					size_t const zi = (size_t)t / GG, gi = (size_t)t % GG;
+					int const z = affected[zi];
 					int const a = S.c0[z], b = S.c1[z];
 					if (a < 0 || b < 0) continue;
 					u64 const* const bA = S.bits.data() + (size_t)a * S.W;
 					u64 const* const bB = S.bits.data() + (size_t)b * S.W;
 					int const sC = (int)nTaxa - S.sz[a] - S.sz[b];
-					#pragma omp parallel for schedule(dynamic) num_threads(P)
-					for (int gi = 0; gi < T; ++gi) {
-						Scratch& sc = scratch[omp_get_thread_num()];
-						for (size_t wi = 0; wi < S.W; ++wi) sc.t1[wi] = ~(bA[wi] | bB[wi]);
-						cache[(size_t)kz * T + gi] = Wnode(genes[gi], bA, bB, sc.t1.data(),
-							S.sz[a], S.sz[b], sC, S.W, sc);
+					Scratch& sc = scratch[omp_get_thread_num()];
+					for (size_t wi = 0; wi < S.W; ++wi) sc.t1[wi] = ~(bA[wi] | bB[wi]);
+					i64 const wv = Wnode(genes[(size_t)glist[gi]], bA, bB, sc.t1.data(),
+						S.sz[a], S.sz[b], sC, S.W, sc);
+					if (outW) (*outW)[(size_t)t] = wv;
+					d += wv - cache[(size_t)idx[(size_t)z] * T + glist[gi]];
+				}
+				return d;
+			};
+			i64 delta = 0;
+			bool pass = true;
+			if (!screenGenes.empty()) {
+				i64 const ds = evalMove(screenGenes, nullptr);
+				if (ds <= 0) pass = false;
+			}
+			if (pass) delta = evalMove(allGenes, &fullW);
+			delta /= 2;
+
+			if (delta > 0) {
+				if (!fullW.empty()) {
+					size_t const GG = allGenes.size();
+					for (size_t zi = 0; zi < affected.size(); ++zi) {
+						int const kz = idx[(size_t)affected[zi]];
+						if (kz < 0) continue;
+						for (size_t gi = 0; gi < GG; ++gi)
+							cache[(size_t)kz * T + allGenes[gi]] = fullW[zi * GG + gi];
 					}
 				}
 				total += delta;
