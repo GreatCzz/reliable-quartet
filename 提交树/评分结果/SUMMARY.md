@@ -1,5 +1,7 @@
 # 学生提交评分台账
 
+> **全员汇总（含 1 组）见 [`ALL_SCORES.md`](ALL_SCORES.md)。**
+
 > 口径：无根三分划（可靠四叶树），`score_fast` 计算，`score --verify` 交叉验证。
 > 不同 rep 的数据不同，**跨 rep 不可比**，只能同 rep 内排名。
 
