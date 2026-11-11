@@ -37,3 +37,4 @@ rscore/aster2/doc/
 # 上游参考克隆（ASTER v1，只读参考，不入库）
 /aster1/
 rscore/solver/placer
+rscore/solver/place_delta
