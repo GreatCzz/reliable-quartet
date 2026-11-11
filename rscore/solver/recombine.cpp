@@ -248,9 +248,10 @@ int main(int argc, char** argv) {
 					if (best[a] == LLONG_MIN || best[b] == LLONG_MIN) continue;
 					i64 w = 0;
 					for (size_t k = 0; k < W; ++k) cBits[k] = 0;
+					#pragma omp parallel for reduction(+:w) num_threads(threads)
 					for (int g = 0; g < T; ++g)
 						w += Wnode(genes[g], clusters[a].data(), clusters[b].data(), cBits.data(),
-							clusterSize[a], clusterSize[b], 0, W, sc);
+							clusterSize[a], clusterSize[b], 0, W, scratch[omp_get_thread_num()]);
 					i64 val = best[a] + best[b] + w;
 					if (val > best[id]) { best[id] = val; bestSplit[id] = (int)si; }
 				}
@@ -262,9 +263,10 @@ int main(int argc, char** argv) {
 				int const sC = (int)nTaxa - clusterSize[a] - clusterSize[b];
 				for (size_t k = 0; k < W; ++k) cBits[k] = ~(clusters[a][k] | clusters[b][k]);
 				i64 w = 0;
+				#pragma omp parallel for reduction(+:w) num_threads(threads)
 				for (int g = 0; g < T; ++g)
 					w += Wnode(genes[g], clusters[a].data(), clusters[b].data(), cBits.data(),
-						clusterSize[a], clusterSize[b], sC, W, sc);
+						clusterSize[a], clusterSize[b], sC, W, scratch[omp_get_thread_num()]);
 				i64 val = best[a] + best[b] + w;
 				if (val > best[id]) { best[id] = val; bestSplit[id] = (int)si; }
 			}

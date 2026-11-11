@@ -7,7 +7,7 @@
 
 int main(int argc, char** argv) {
     string genesFile, outFile;
-    int nGenes = 20, threads = 1;
+    int nGenes = 20, threads = 1, backbone = 0;
     long seed = -1;
     bool randomOrder = false;
     for (int i = 1; i < argc; ++i) {
@@ -18,6 +18,7 @@ int main(int argc, char** argv) {
         else if (a == "-t") threads = atoi(nx().c_str());
         else if (a == "--genes") nGenes = atoi(nx().c_str());
         else if (a == "--seed") seed = atol(nx().c_str());
+        else if (a == "--backbone") backbone = atoi(nx().c_str());
         else if (a == "--order") { string v = nx(); randomOrder = (v == "rand"); }
         else if (a == "-h") { cout << "usage: placer2 -i genes.trees -o out.tree [--genes K] [--order freq|rand] [--seed S]\n"; return 0; }
         else { cerr << "unknown arg " << a << "\n"; return 2; }
@@ -56,6 +57,8 @@ int main(int argc, char** argv) {
 
     PTree T;
     T.name = names;
+    PTree frozen;            // 骨架快照（两段式放置用）
+    bool haveFrozen = false;
     auto t0 = chrono::steady_clock::now();
 
     for (int idx = 0; idx < nTaxa; ++idx) {
@@ -68,12 +71,14 @@ int main(int argc, char** argv) {
             T.par[p] = w; T.par[leaf] = w; T.root = w;
             continue;
         }
+        if (backbone > 0 && idx >= backbone && !haveFrozen) { frozen = T; haveFrozen = true; }
+        PTree const& evalTree = (backbone > 0 && idx >= backbone) ? frozen : T;
         vector<long long> delta; long long rootDelta = 0;
-        computeAllDeltas(T, geneLines, G, names[(size_t)x], delta, rootDelta);
+        computeAllDeltas(evalTree, geneLines, G, names[(size_t)x], delta, rootDelta);
 
         long long best = rootDelta; int bestP = -1;   // -1 表示"插到根之上"
-        for (int u = 0; u < (int)T.par.size(); ++u) {
-            if (u == T.root) continue;
+        for (int u = 0; u < (int)evalTree.par.size(); ++u) {
+            if (u == evalTree.root) continue;
             if (delta[(size_t)u] > best) { best = delta[(size_t)u]; bestP = u; }
         }
         if (bestP < 0) {   // 根之上：新根 = (旧根, x)
@@ -88,6 +93,7 @@ int main(int argc, char** argv) {
             if (par0 < 0) T.root = w;
             else { if (T.c0[par0] == p) T.c0[par0] = w; else T.c1[par0] = w; }
             T.par[p] = w;
+            T.par[leaf] = w;
         }
         if ((idx + 1) % 200 == 0 || idx + 1 == nTaxa)
             cerr << "[placer2] " << (idx + 1) << "/" << nTaxa << " ("
