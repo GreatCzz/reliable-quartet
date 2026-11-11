@@ -407,6 +407,10 @@ int main(int argc, char** argv) {
 			<< " total=" << total << "  ("
 			<< std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - ts).count()
 			<< " s)" << std::endl;
+		if (!args.output.empty()) {   // 每轮存盘，长作业可断点续跑
+			std::ofstream fout(args.output);
+			fout << toNewick(S, S.root) << ";\n";
+		}
 		if (moves == 0) break;
 	}
 
