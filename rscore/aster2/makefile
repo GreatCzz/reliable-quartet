@@ -13,6 +13,9 @@ caster: dir
 
 rscore: dir
 	g++ -std=c++20 -march=native -Ofast -D RSCORE src/driver.cpp -o bin/rscore
+
+rscore_incr: dir
+	g++ -std=c++20 -march=native -Ofast -D RSCORE_INCR src/driver.cpp -o bin/rscore_incr
 	
 sister: dir
 	g++ -std=c++20 -march=native -Ofast -D SISTER src/driver.cpp -o bin/sister

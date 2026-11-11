@@ -68,6 +68,49 @@ g++ -std=c++20 -O3 -march=native -fopenmp -I ../aster2/src solver.cpp -o solver
 | `--rounds R --kick K` | 迭代局部搜索：每轮随机扰动 K 次后再 NNI |
 | `-o` | 输出树路径 |
 
+### 3.5 仅评分模式（助教用）
+
+给一棵**估计物种树**和一批基因树，只算分数、不做任何搜索：
+
+```bash
+./rscore/score.sh -t est.tree -g genes.trees[.gz] [-j 32] [-q]
+```
+
+默认使用**快速后端**（`score_fast`，源自导师的 `solution_fast.cpp`，约 100× 加速）；
+`--ref` 用我们自己的参考实现，`--verify` 同时跑两者并比对（不一致时退出码 3）。
+
+输出一行 JSON（stdout）：
+
+```json
+{"score":12345,"n_taxa":40,"n_genes":30,"n_scored_genes":30,"n_skipped_genes":0,
+ "n_unused_taxa":0,"n_ignored_taxa":0,"runtime_sec":0.12,"per_gene":[400,420,...]}
+```
+
+| 字段 | 含义 |
+|---|---|
+| `score` | 总可靠四叶树分数 |
+| `n_taxa` | 物种树 + 基因树并集的类群数 |
+| `n_genes` / `n_scored_genes` / `n_skipped_genes` | 基因树总数 / 参与计分 / 因少于 4 个类群被跳过 |
+| `n_unused_taxa` | 只在物种树出现、所有基因树都没有的类群（不贡献分数） |
+| `n_ignored_taxa` | 只在基因树出现、物种树没有的类群（被忽略） |
+| `per_gene` | 每棵基因树的分数（与 `score` 一一对应，和等于 `score`） |
+| `runtime_sec` | 计分耗时 |
+
+**输入要求**：
+
+- 物种树：Newick，**必须二叉**，文件里**只能有一棵**；多叉会报错（按需求不自动解析）；
+- 基因树：每行一棵，可多叉、可带 `S`/`D` 标号、可缺类群（与比赛口径一致）。
+
+**退出码**：`0` 成功；`1` 输入非法（多叉物种树、重名叶子、空文件、解析失败等）；`2` 参数错误。
+
+**边界语义**：分数只统计"物种树与基因树共有类群"构成的四叶树；缺失类群、多余类群都不会被静默计入。
+
+> 不想用脚本包装时，也可以直接调用二进制（需自行解压 `.gz`）：
+> `./rscore/solver/score_fast -t est.tree -g genes.trees`（快）
+> `./rscore/solver/score -t est.tree -g genes.trees`（参考实现，慢但独立验证过）
+
+**性能**：10000 类群 × 1000 棵树，快后端约 **5 秒**，参考实现约 **6 分钟**（32 线程）。
+
 ## 4. 输入格式
 
 - **基因树**：Newick，一行一棵；内部边标号 `S`（实线）/`D`（虚线）；**叶子边无需标号，默认实线**；
