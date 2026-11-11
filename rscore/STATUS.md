@@ -69,3 +69,36 @@
 
 ### 归档
 - `rscore/results/diverse_20261111/`：6 棵放置树 + 重组结果 + `team01_nni_v3.tree`
+
+## 2026-11-11 关机前交接
+
+### 已实现（ASTRAL 三步的 1+2）
+`placer2` 新增两个模式：
+- `--stop-after B`：只放到 B 个类群就停（产出骨架）
+- `--resume-init T`：从已有树 T 继续放剩余类群（扇区 Δ 在生长树上）
+
+配套流程（**500 类群已验证**）：
+```bash
+placer2 -i genes --stop-after 200 --order rand --seed 1 -o bb.tree
+solver -s bb.tree -i genes --sweeps 20 -o bb_nni.tree      # 骨架 NNI
+placer2 -i genes --resume-init bb_nni.tree -o final.tree   # 剩余类群放回
+solver -s final.tree -i genes --sweeps 60 -o final_nni.tree
+```
+500 类群结果：**2,418,965,337**（对照：直接放置 2.351e9，框架 2.53e9）→ **比直接放置好 3%**。
+
+### 全量进度（被关机中断）
+- 骨架 365 已生成：`rscore/results/astral_20261111/backbone365.tree`
+- 骨架 NNI 被打断（未完成）
+- 6 棵不同参数放置树已完成但**未打分**：`t13/t14/t15/t16/t21/t22.tree`
+  （参数见生成命令：genes 5/20 × backbone 0/300/1000 × 不同 seed）
+
+### 恢复后的第一步
+```bash
+cd rscore/solver
+# 1) 骨架 NNI
+./solver -s ../results/astral_20261111/backbone365.tree -i /tmp/rep01.trees -t 32 --sweeps 15 -o /tmp/bb_full_nni.tree
+# 2) 剩余类群放回（约 15-20 分钟）
+./placer2 -i /tmp/rep01.trees --resume-init /tmp/bb_full_nni.tree -o /tmp/astral_full.tree
+# 3) 打分
+./rscore/score.sh -t /tmp/astral_full.tree -g rep01.trees.gz -j 32
+```
