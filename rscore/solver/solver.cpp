@@ -251,8 +251,23 @@ string toNewick(SpeciesTree const& t, int u) {
 	return "(" + toNewick(t, t.c0[u]) + "," + toNewick(t, t.c1[u]) + ")";
 }
 
+string printScore128(__int128 x) {
+	if (x == 0) return "0";
+	bool neg = x < 0;
+	if (neg) x = -x;
+	string s;
+	while (x > 0) {
+		s.push_back(char('0' + x % 10));
+		x /= 10;
+	}
+	if (neg) s.push_back('-');
+	std::reverse(s.begin(), s.end());
+	return s;
+}
+
 } // namespace
 
+#ifndef SOLVER_NO_MAIN
 int main(int argc, char** argv) {
 	Args const args = parseArgs(argc, argv);
 
@@ -335,8 +350,8 @@ int main(int argc, char** argv) {
 	}
 	__int128 totalW = 0;
 	for (i64 x : cache) totalW += x;
-	i64 total = (i64)(totalW / 2);
-	std::cerr << "[solver] initial score = " << total << "  ("
+	__int128 total = totalW / 2;
+	std::cerr << "[solver] initial score = " << printScore128(total) << "  ("
 		<< std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - t0).count()
 		<< " s initial scoring)" << std::endl;
 
@@ -348,7 +363,7 @@ int main(int argc, char** argv) {
 	vector<i64> WuArr(T), WvArr(T);
 
 	for (int sweep = 1; sweep <= args.sweeps; ++sweep) {
-		i64 sweepGain = 0;
+		__int128 sweepGain = 0;
 		int moves = 0;
 		auto ts = std::chrono::steady_clock::now();
 		for (int k = 0; k < K; ++k) {
@@ -403,8 +418,8 @@ int main(int argc, char** argv) {
 				}
 			}
 		}
-		std::cerr << "[solver] sweep " << sweep << ": moves=" << moves << " gain=" << sweepGain
-			<< " total=" << total << "  ("
+		std::cerr << "[solver] sweep " << sweep << ": moves=" << moves << " gain=" << printScore128(sweepGain)
+			<< " total=" << printScore128(total) << "  ("
 			<< std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - ts).count()
 			<< " s)" << std::endl;
 		if (!args.output.empty()) {   // 每轮存盘，长作业可断点续跑
@@ -417,6 +432,7 @@ int main(int argc, char** argv) {
 	string const nw = toNewick(S, S.root) + ";";
 	if (args.output.empty()) std::cout << nw << std::endl;
 	else { std::ofstream fout(args.output); fout << nw << "\n"; }
-	std::cerr << "[solver] final score = " << total << std::endl;
+	std::cerr << "[solver] final score = " << printScore128(total) << std::endl;
 	return 0;
 }
+#endif // SOLVER_NO_MAIN
