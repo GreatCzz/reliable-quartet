@@ -245,6 +245,7 @@ struct Args {
 	double target = 0.0;   // >0：只从"贡献最低的 target 比例"节点里采样 x
 	int screen = 0;        // >0：先用 screen 棵树筛选移动，通过后再用全部树确认
 	int localDepth = 0;    // >0：v 优先在 x 原位置附近 localDepth 条边内选（局部 SPR）
+	int kick = 0;          // >0：前 kick 次移动无条件接受（扰动重启）
 	long long seed = 1;
 	bool verbose = false;
 };
@@ -264,6 +265,7 @@ Args parseArgs(int argc, char** argv) {
 		else if (s == "--target") a.target = std::stod(next());
 		else if (s == "--screen") a.screen = std::stoi(next());
 		else if (s == "--local") a.localDepth = std::stoi(next());
+		else if (s == "--kick") a.kick = std::stoi(next());
 		else if (s == "-v") a.verbose = true;
 		else { std::cerr << "unknown arg " << s << std::endl; std::exit(2); }
 	}
@@ -349,6 +351,7 @@ int main(int argc, char** argv) {
 		for (int i = 0; i < T; i += stride) screenGenes.push_back(i);
 	}
 
+	int kickLeft = args.kick;
 	vector<std::pair<i64,int>> pool;
 	for (int round = 1; round <= args.rounds; ++round) {
 		i64 gain = 0;
@@ -370,10 +373,21 @@ int main(int argc, char** argv) {
 		auto ts = std::chrono::steady_clock::now();
 		for (int it = 0; it < args.iters; ++it) {
 			if (getenv("SPR_DEBUG")) std::cerr << "it=" << it << " ";
-			// ---- 1) 选子树 x（--target>0 时从低贡献池里选）
-			int x;
-			if (args.target > 0.0 && !pool.empty()) x = pool[(size_t)(rng() % (u64)pool.size())].second;
-			else x = S.internal[(size_t)(rng() % (u64)K)];
+			// ---- 1) 选子树 x（--target>0 时从低贡献池里选；扰动阶段优先大子树）
+			bool const isKick = (kickLeft > 0);
+			if (isKick) --kickLeft;
+			int x = -1;
+			if (isKick) {
+				int const minSz = std::max(5, (int)nTaxa / 200);
+				for (int attempt = 0; attempt < 200; ++attempt) {
+					int const cand = S.internal[(size_t)(rng() % (u64)K)];
+					if (S.sz[cand] >= minSz && S.sz[cand] <= (int)nTaxa - minSz) { x = cand; break; }
+				}
+			}
+			if (x < 0) {
+				if (args.target > 0.0 && !pool.empty()) x = pool[(size_t)(rng() % (u64)pool.size())].second;
+				else x = S.internal[(size_t)(rng() % (u64)K)];
+			}
 			if (S.sz[x] < 2 || S.sz[x] > (int)nTaxa - 2) continue;
 			int const p = S.par[x];
 			if (p < 0) continue;
@@ -554,7 +568,7 @@ int main(int argc, char** argv) {
 			if (pass) delta = evalMove(allGenes, &fullW);
 			delta /= 2;
 
-			if (delta > 0) {
+			if (delta > 0 || isKick) {
 				if (!fullW.empty()) {
 					size_t const GG = allGenes.size();
 					for (size_t zi = 0; zi < affected.size(); ++zi) {
