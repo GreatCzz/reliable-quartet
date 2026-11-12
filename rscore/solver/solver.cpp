@@ -9,6 +9,7 @@
 // Build:  g++ -std=c++20 -O3 -march=native -fopenmp -I ../aster2/src solver.cpp -o solver
 
 #include "newick.hpp"
+#include "w3.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -306,6 +307,12 @@ int main(int argc, char** argv) {
 	SpeciesTree S = buildSpecies(spTrees[0].root(), nTaxa);
 
 	int const T = (int)genes.size();
+	vector<w3::GeneView> gv;
+	for (auto& g : genes) {
+		w3::GeneView v;
+		v.start = g.start; v.kids = g.kids; v.solid = g.solid; v.taxon = g.taxon; v.root = g.root; v.n = g.n;
+		gv.push_back(std::move(v));
+	}
 	int const K = (int)S.internal.size();
 	std::cerr << "[solver] species nodes=" << S.n << " internal=" << K
 		<< " genes=" << T << " taxa=" << nTaxa << std::endl;
@@ -318,6 +325,8 @@ int main(int argc, char** argv) {
 	int maxN = 1;
 	for (auto const& g : genes) maxN = std::max(maxN, g.n);
 	for (auto& s : scratch) { s.resize(maxN); s.t1.assign(S.W, 0); s.t2.assign(S.W, 0); }
+	vector<w3::Scratch3> s3(P);
+	for (auto& x : s3) x.resize(maxN);
 
 	auto t0 = std::chrono::steady_clock::now();
 	#pragma omp parallel for schedule(dynamic) num_threads(P)
@@ -329,9 +338,9 @@ int main(int argc, char** argv) {
 		u64 const* const bB = S.bits.data() + (size_t)b * S.W;
 		int const sC = (int)nTaxa - S.sz[a] - S.sz[b];
 		for (size_t w = 0; w < S.W; ++w) sc.t1[w] = ~(bA[w] | bB[w]);   // C
+		w3::Scratch3& sc3 = s3[omp_get_thread_num()];
 		for (int g = 0; g < T; ++g)
-			cache[(size_t)k * T + g] = Wnode(genes[g], bA, bB, sc.t1.data(),
-				S.sz[a], S.sz[b], sC, S.W, sc);
+			cache[(size_t)k * T + g] = w3::Wnode3(gv[(size_t)g], bA, bB, sc.t1.data(), S.W, sc3);
 	}
 	__int128 totalW = 0;
 	for (i64 x : cache) totalW += x;
@@ -375,13 +384,11 @@ int main(int argc, char** argv) {
 					Scratch& sc = scratch[omp_get_thread_num()];
 					// v' = (a, y)，C_v' = ~(a|y)
 					for (size_t w = 0; w < S.W; ++w) sc.t1[w] = ~tmpA[w];
-					i64 const wv = Wnode(genes[g], bA, bY, sc.t1.data(),
-						S.sz[a], S.sz[y], (int)nTaxa - sV, S.W, sc);
+					i64 const wv = w3::Wnode3(gv[(size_t)g], bA, bY, sc.t1.data(), S.W, s3[omp_get_thread_num()]);
 					// u' = (v', x)，C_u' = ~(a|y|x)
 					u64 const* const bU = S.bits.data() + (size_t)u * S.W;
 					for (size_t w = 0; w < S.W; ++w) sc.t1[w] = ~(tmpA[w] | bX[w]);
-					i64 const wu = Wnode(genes[g], tmpA.data(), bX, sc.t1.data(),
-						sV, S.sz[x], (int)nTaxa - sV - S.sz[x], S.W, sc);
+					i64 const wu = w3::Wnode3(gv[(size_t)g], tmpA.data(), bX, sc.t1.data(), S.W, s3[omp_get_thread_num()]);
 					WuArr[g] = wu;
 					WvArr[g] = wv;
 					delta += wu + wv - cache[(size_t)k * T + g] - cache[(size_t)ku * T + g];

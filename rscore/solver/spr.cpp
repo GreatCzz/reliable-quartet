@@ -13,6 +13,7 @@
 // Build: g++ -std=c++20 -O3 -march=native -fopenmp -I ../aster2/src spr.cpp -o spr
 
 #include "newick.hpp"
+#include "w3.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -301,6 +302,12 @@ int main(int argc, char** argv) {
 		}
 	}
 	int const T = (int)genes.size();
+	vector<w3::GeneView> gv;
+	for (auto& g : genes) {
+		w3::GeneView v;
+		v.start = g.start; v.kids = g.kids; v.solid = g.solid; v.taxon = g.taxon; v.root = g.root; v.n = g.n;
+		gv.push_back(std::move(v));
+	}
 	size_t const nTaxa = common::taxonName2ID.nTaxa();
 	SpeciesTree S = buildSpecies(spTree.root(), nTaxa);
 	int const K = (int)S.internal.size();
@@ -312,6 +319,8 @@ int main(int argc, char** argv) {
 	int maxN = 1;
 	for (auto const& g : genes) maxN = std::max(maxN, g.n);
 	for (auto& s : scratch) { s.resize(maxN); s.t1.assign(S.W, 0); s.t2.assign(S.W, 0); }
+	vector<w3::Scratch3> s3(P);
+	for (auto& x : s3) x.resize(maxN);
 
 	vector<int> idx(S.n, -1);
 	for (int k = 0; k < K; ++k) idx[S.internal[k]] = k;
@@ -328,9 +337,9 @@ int main(int argc, char** argv) {
 			u64 const* const bB = S.bits.data() + (size_t)b * S.W;
 			int const sC = (int)nTaxa - S.sz[a] - S.sz[b];
 			for (size_t w = 0; w < S.W; ++w) sc.t1[w] = ~(bA[w] | bB[w]);
+			w3::Scratch3& sc3 = s3[omp_get_thread_num()];
 			for (int g = 0; g < T; ++g)
-				cache[(size_t)k * T + g] = Wnode(genes[g], bA, bB, sc.t1.data(),
-					S.sz[a], S.sz[b], sC, S.W, sc);
+				cache[(size_t)k * T + g] = w3::Wnode3(gv[(size_t)g], bA, bB, sc.t1.data(), S.W, sc3);
 		}
 	};
 	scoreAll(true);
@@ -552,8 +561,8 @@ int main(int argc, char** argv) {
 					int const sC = (int)nTaxa - S.sz[a] - S.sz[b];
 					Scratch& sc = scratch[omp_get_thread_num()];
 					for (size_t wi = 0; wi < S.W; ++wi) sc.t1[wi] = ~(bA[wi] | bB[wi]);
-					i64 const wv = Wnode(genes[(size_t)glist[gi]], bA, bB, sc.t1.data(),
-						S.sz[a], S.sz[b], sC, S.W, sc);
+					i64 const wv = w3::Wnode3(gv[(size_t)glist[gi]], bA, bB, sc.t1.data(), S.W,
+						s3[omp_get_thread_num()]);
 					if (outW) (*outW)[(size_t)t] = wv;
 					d += wv - cache[(size_t)idx[(size_t)z] * T + glist[gi]];
 				}
