@@ -16,14 +16,17 @@
 
 | 树 | 分数 | 说明 |
 |---|---|---|
-| **`submissions/team01_sub_1111.tree`** | **1,674,090,151,256,286** | **当前最好**：集群 NNI（v4）+ SPR + 多轮精修 |
+| **`submissions/team01_sub_1113b.tree`** | **1,740,983,264,996,131** | **当前最好（11-13 14:31）** |
+| `submissions/team01_sub_1113.tree` | 1,738,063,330,826,792 | 11-13 00:53 |
+| `submissions/team01_sub_1112_1313.tree` | 1,732,600,430,110,212 | 11-12 13:13 |
+| `submissions/team01_sub_1112.tree` | 1,697,691,610,284,838 | 11-12 00:40 |
+| `submissions/team01_sub_1111.tree` | 1,674,090,151,256,286 | 11-11 夜 |
 | `submissions/team01_nni_v3.tree` | 1,602,087,160,774,962 | 增量 NNI（`nni_incr`）精修 |
-| `submissions/team01_incr6.tree` | 1,601,902,551,830,046 | rbuild + 6 轮增量 NNI |
 | `submissions/team01_rbuild.tree` | 1,598,565,085,124,791 | 共识 + 3 轮 NNI（旧实现） |
 | `submissions/team01_consensus_v0.tree` | 1,598,513,034,536,168 | 簇共识基线 |
 
 **横向位置**（各 rep 分数被老师调平，故用"相对增益 = 自家分 ÷ 外来树地板 − 1"比较）：
-助教组 **+16.20%**，在已交的 17 个组里排第 7；最高 17 组 +21.59%。
+助教组 **+20.85%**，在已交的 17 个组里**排第 2**；最高 17 组 +21.59%（我们差 0.59%）。
 
 全员评分台账：[`提交树/评分结果/ALL_SCORES.md`](提交树/评分结果/ALL_SCORES.md)；
 分组名单与提交状态：[`提交树/评分结果/GROUPS.md`](提交树/评分结果/GROUPS.md)；
@@ -41,11 +44,11 @@ g++ -std=c++20 -O3 -march=native -fopenmp score_fast.cpp                -o score
 cd ../..
 
 # 2) 给任意一棵树打分（JSON，含逐基因分数）
-./rscore/score.sh -t submissions/team01_sub_1111.tree -g rep01.trees.gz -j 32
-# → 1,674,090,151,256,286
+./rscore/score.sh -t submissions/team01_sub_1113b.tree -g rep01.trees.gz -j 32
+# → 1,740,983,264,996,131
 
 # 3) 快速打分（默认后端，约 5 秒/1000 棵树）
-./rscore/solver/score_fast -t submissions/team01_sub_1111.tree -g rep01.trees.gz -j 32 -q
+./rscore/solver/score_fast -t submissions/team01_sub_1113b.tree -g rep01.trees.gz -j 32 -q
 
 # 4) 全量 NNI 精修（增量实现，约 3 分钟/轮）
 ./rscore/solver/nni_incr -s submissions/team01_nni_v3.tree -i rep01.trees.gz -t 26 --sweeps 2 -o out.nwk
