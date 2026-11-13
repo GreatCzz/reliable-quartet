@@ -30,7 +30,7 @@
 
 全员评分台账：[`提交树/评分结果/ALL_SCORES.md`](提交树/评分结果/ALL_SCORES.md)；
 分组名单与提交状态：[`提交树/评分结果/GROUPS.md`](提交树/评分结果/GROUPS.md)；
-单页排名 slide：[`提交树/评分结果/ranking_2026-11-11.pptx`](提交树/评分结果/ranking_2026-11-11.pptx)。
+单页排名 slide：[`提交树/评分结果/ranking_2026-11-13.pptx`](提交树/评分结果/ranking_2026-11-13.pptx)。
 
 ## 快速开始
 
