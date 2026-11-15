@@ -14,6 +14,7 @@
 
 #include "newick.hpp"
 #include "w3.hpp"
+#include "sector.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -248,6 +249,9 @@ struct Args {
 	int localDepth = 0;    // >0：v 优先在 x 原位置附近 localDepth 条边内选（局部 SPR）
 	int kick = 0;          // >0：前 kick 次移动无条件接受（扰动重启）
 	int allowLeaf = 0;     // 1：允许移动单个叶子（leaf SPR）
+	int sectorK = 0;       // >0：每轮先做 K 个类群的 sector 精确重插入
+	int sectorGenes = 20;  // sector 排序用的基因数
+	string probe;          // "xName:vName" 调试：打印把 x 移到 v 上方的 Δ
 	long long seed = 1;
 	bool verbose = false;
 };
@@ -269,6 +273,9 @@ Args parseArgs(int argc, char** argv) {
 		else if (s == "--local") a.localDepth = std::stoi(next());
 		else if (s == "--kick") a.kick = std::stoi(next());
 		else if (s == "--leaf") a.allowLeaf = std::stoi(next());
+		else if (s == "--sector") a.sectorK = std::stoi(next());
+		else if (s == "--sector-genes") a.sectorGenes = std::stoi(next());
+		else if (s == "--probe") a.probe = next();
 		else if (s == "-v") a.verbose = true;
 		else { std::cerr << "unknown arg " << s << std::endl; std::exit(2); }
 	}
@@ -363,10 +370,261 @@ int main(int argc, char** argv) {
 	}
 
 	int kickLeft = args.kick;
+	// 调试：bits 结构不变量（bits[z] == bits[c0] | bits[c1]，sz 一致）
+	auto checkBits = [&](const char* tag) {
+		if (!getenv("SPR_BITS")) return;
+		for (int z = 0; z < S.n; ++z) {
+			if (S.c0[z] < 0 || S.c1[z] < 0) continue;
+			u64 const* const a = S.bits.data() + (size_t)S.c0[z] * S.W;
+			u64 const* const b = S.bits.data() + (size_t)S.c1[z] * S.W;
+			u64 const* const zz = S.bits.data() + (size_t)z * S.W;
+			for (size_t wi = 0; wi < S.W; ++wi) {
+				if (zz[wi] != (a[wi] | b[wi])) {
+					std::cerr << "[BITS:" << tag << "] node=" << z << " word=" << wi
+						<< " bits=" << zz[wi] << " union=" << (a[wi] | b[wi])
+						<< " c0=" << S.c0[z] << " c1=" << S.c1[z] << "\n";
+					std::abort();
+				}
+			}
+		}
+	};
+
+	// 调试：全量重算并与 cache 比对
+	auto verifyAll = [&](const char* tag) {
+		if (!getenv("SPR_VERIFY")) return;
+		for (int k = 0; k < K; ++k) {
+			int const v2 = S.internal[(size_t)k];
+			int const a2 = S.c0[v2], b2 = S.c1[v2];
+			if (a2 < 0 || b2 < 0) continue;
+			u64 const* const bA = S.bits.data() + (size_t)a2 * S.W;
+			u64 const* const bB = S.bits.data() + (size_t)b2 * S.W;
+			for (int gi = 0; gi < T; ++gi) {
+				Scratch& sc = scratch[omp_get_thread_num()];
+				for (size_t wi = 0; wi < S.W; ++wi) sc.t1[wi] = ~(bA[wi] | bB[wi]);
+				i64 const wv = w3::Wnode3(gv[(size_t)gi], bA, bB, sc.t1.data(), S.W, s3[omp_get_thread_num()]);
+				if (wv != cache[(size_t)k * T + gi]) {
+					std::cerr << "[VERIFY:" << tag << "] node=" << v2 << " gene=" << gi
+						<< " cache=" << cache[(size_t)k * T + gi] << " recomputed=" << wv
+						<< " c0=" << a2 << " c1=" << b2 << " par=" << S.par[v2] << " sz=" << S.sz[v2] << "\n";
+					std::abort();
+				}
+			}
+		}
+	};
+
+	// ===== sector 相位：叶子重插入（严格按推导实现）=====
+	// 摘下叶子 x（抑制父 p）：结构 + bits + sz 一起改
+	auto detachLeaf = [&](int x, int& pOut, int& gOut, int& sibOut) {
+		int const p = S.par[x], g = S.par[p];
+		int const sib = (S.c0[p] == x) ? S.c1[p] : S.c0[p];
+		if (g < 0) { S.root = sib; S.par[sib] = -1; }
+		else { if (S.c0[g] == p) S.c0[g] = sib; else S.c1[g] = sib; S.par[sib] = g; }
+		u64 const* const bx = S.bits.data() + (size_t)x * S.W;
+		for (int z = g; z >= 0; z = S.par[z]) {
+			--S.sz[z];
+			u64* const bz = S.bits.data() + (size_t)z * S.W;
+			for (size_t wi = 0; wi < S.W; ++wi) bz[wi] &= ~bx[wi];
+		}
+		pOut = p; gOut = g; sibOut = sib;
+		checkBits("detach");
+	};
+	auto restoreDetached = [&](int x, int p, int g, int sib) {
+		if (g < 0) { S.root = p; S.par[p] = -1; }
+		else { if (S.c0[g] == sib) S.c0[g] = p; else S.c1[g] = p; S.par[p] = g; }
+		S.c0[p] = x; S.c1[p] = sib; S.par[x] = p; S.par[sib] = p;
+		// p 的 bits/sz 必须显式重建（回滚可能把 p 的 bits 留在脏状态）
+		{
+			u64* const bp = S.bits.data() + (size_t)p * S.W;
+			u64 const* const bx = S.bits.data() + (size_t)x * S.W;
+			u64 const* const bs = S.bits.data() + (size_t)sib * S.W;
+			for (size_t wi = 0; wi < S.W; ++wi) bp[wi] = bx[wi] | bs[wi];
+			S.sz[p] = 1 + S.sz[sib];
+		}
+		u64 const* const bx = S.bits.data() + (size_t)x * S.W;
+		for (int z = g; z >= 0; z = S.par[z]) {
+			++S.sz[z];
+			u64* const bz = S.bits.data() + (size_t)z * S.W;
+			for (size_t wi = 0; wi < S.W; ++wi) bz[wi] |= bx[wi];
+		}
+		checkBits("restore");
+	};
+	// 从"已摘下"状态插到 v 上方（v<0 = 根之上）；A = {w} ∪ Path(u) ∪ Path(gOld)
+	auto tryInsertDetached = [&](int x, int p, int gOld, int v, bool commit) -> i64 {
+		int const u = (v < 0) ? -1 : S.par[v];
+		int const vv = (v < 0) ? S.root : v;
+		S.c0[p] = x; S.c1[p] = vv; S.par[x] = p; S.par[vv] = p;
+		if (u < 0) { S.root = p; S.par[p] = -1; }
+		else { if (S.c0[u] == vv) S.c0[u] = p; else S.c1[u] = p; S.par[p] = u; }
+		{
+			u64* const bw = S.bits.data() + (size_t)p * S.W;
+			u64 const* const bx = S.bits.data() + (size_t)x * S.W;
+			u64 const* const bv = S.bits.data() + (size_t)vv * S.W;
+			for (size_t wi = 0; wi < S.W; ++wi) bw[wi] = bx[wi] | bv[wi];
+			S.sz[p] = 1 + S.sz[vv];
+		}
+		{
+			u64 const* const bx = S.bits.data() + (size_t)x * S.W;
+			for (int z = u; z >= 0; z = S.par[z]) {
+				u64* const bz = S.bits.data() + (size_t)z * S.W;
+				for (size_t wi = 0; wi < S.W; ++wi) bz[wi] |= bx[wi];
+				++S.sz[z];
+			}
+		}
+		vector<int> affected; affected.push_back(p);
+		for (int z = u; z >= 0; z = S.par[z]) affected.push_back(z);
+		for (int z = gOld; z >= 0; z = S.par[z]) affected.push_back(z);
+		std::sort(affected.begin(), affected.end());
+		affected.erase(std::unique(affected.begin(), affected.end()), affected.end());
+		i64 delta = 0;
+		vector<i64> newW((size_t)affected.size() * (size_t)T);
+		for (size_t zi = 0; zi < affected.size(); ++zi) {
+			int const z = affected[zi];
+			int const a = S.c0[z], b = S.c1[z];
+			if (a < 0 || b < 0) continue;
+			u64 const* const bA = S.bits.data() + (size_t)a * S.W;
+			u64 const* const bB = S.bits.data() + (size_t)b * S.W;
+			int const sC = (int)nTaxa - S.sz[a] - S.sz[b];
+			for (int gi = 0; gi < T; ++gi) {
+				Scratch& sc = scratch[omp_get_thread_num()];
+				for (size_t wi = 0; wi < S.W; ++wi) sc.t1[wi] = ~(bA[wi] | bB[wi]);
+				newW[zi * (size_t)T + (size_t)gi] = w3::Wnode3(gv[(size_t)gi], bA, bB, sc.t1.data(), S.W,
+					s3[omp_get_thread_num()]);
+			}
+			int const kz = idx[(size_t)z];
+			for (int gi = 0; gi < T; ++gi) delta += newW[zi * (size_t)T + (size_t)gi] - cache[(size_t)kz * T + gi];
+		}
+		delta /= 2;
+		if (commit && delta > 0) {
+			for (size_t zi = 0; zi < affected.size(); ++zi) {
+				int const z = affected[zi];
+				int const kz = idx[(size_t)z];
+				for (int gi = 0; gi < T; ++gi) cache[(size_t)kz * T + gi] = newW[zi * (size_t)T + (size_t)gi];
+			}
+			return delta;
+		}
+		checkBits("insert");
+		// 回滚到"已摘下"状态
+		S.c0[p] = -1; S.c1[p] = -1;
+		if (u < 0) S.root = vv;
+		else { if (S.c0[u] == p) S.c0[u] = vv; else S.c1[u] = vv; }
+		S.par[vv] = u;
+		{
+			u64 const* const bx = S.bits.data() + (size_t)x * S.W;
+			for (int z = u; z >= 0; z = S.par[z]) {
+				u64* const bz = S.bits.data() + (size_t)z * S.W;
+				for (size_t wi = 0; wi < S.W; ++wi) bz[wi] &= ~bx[wi];
+				--S.sz[z];
+			}
+		}
+		checkBits("revert");
+		return delta;
+	};
+	// 自检 2：detach -> tryInsert(revert) -> restore 是否保持 bits 不变量
+	if (getenv("SELFTEST_INSERT")) {
+		int n2 = 0;
+		for (int u = 0; u < S.n; ++u) {
+			if (S.taxon[u] < 0) continue;
+			int p, g, sib;
+			detachLeaf(u, p, g, sib);
+			for (int v2 = 0; v2 < S.n; ++v2) {
+				if (S.taxon[v2] >= 0 && S.sz[v2] != 1) continue;
+				if (v2 == u || v2 == p) continue;
+				if (getenv("SELFTEST_TRACE")) std::cerr << "[trace] x=" << u << " p=" << p << " g=" << g << " v=" << v2 << "\n";
+				tryInsertDetached(u, p, g, v2, false);
+				checkBits("revert");
+				++n2;
+			}
+			restoreDetached(u, p, g, sib);
+			checkBits("restore2");
+		}
+		std::cerr << "[selftest] insert/revert " << n2 << " times: OK\n";
+		return 0;
+	}
+	// 自检：detach/restore 是否保持 bits 不变量
+	if (getenv("SELFTEST_DETACH")) {
+		int bad = 0;
+		for (int u = 0; u < S.n; ++u) {
+			if (S.taxon[u] < 0) continue;
+			int p, g, sib;
+			detachLeaf(u, p, g, sib);
+			checkBits("detach");
+			restoreDetached(u, p, g, sib);
+			checkBits("restore");
+			++bad;
+		}
+		std::cerr << "[selftest] detach/restore on " << bad << " leaves: OK\n";
+		return 0;
+	}
+	// 调试：--probe "xName:vName" 打印把叶子 x 移到 v 上方的精确 Δ
+	if (!args.probe.empty()) {
+		size_t const c = args.probe.find(':');
+		string const xn = args.probe.substr(0, c), vn = args.probe.substr(c + 1);
+		int xid = -1, vid = -1;
+		for (int t = 0; t < (int)nTaxa; ++t) {
+			string const nm = common::taxonName2ID[(size_t)t];
+			if (nm == xn) xid = t;
+			if (nm == vn) vid = t;
+		}
+		int xn2 = -1, vn2 = -1;
+		for (int u = 0; u < S.n; ++u) {
+			if (S.taxon[u] == xid) xn2 = u;
+			if (S.taxon[u] == vid) vn2 = u;
+		}
+		if (xn2 < 0 || vn2 < 0) { std::cerr << "probe: taxon not found\n"; return 1; }
+		int p, g, sib;
+		detachLeaf(xn2, p, g, sib);
+		i64 const d = tryInsertDetached(xn2, p, g, vn2, false);
+		std::cout << d << "\n";
+		return 0;
+	}
 	vector<std::pair<i64,int>> pool;
 	for (int round = 1; round <= args.rounds; ++round) {
 		i64 gain = 0;
 		int accepted = 0;
+		if (args.sectorK > 0) {
+			int done = 0, acc2 = 0; i64 gain2 = 0;
+			for (int kk = 0; kk < args.sectorK; ++kk) {
+				int x = -1;
+				for (int attempt = 0; attempt < 200; ++attempt) {
+					int const cand = (int)(rng() % (u64)S.n);
+					if (S.taxon[cand] >= 0) { x = cand; break; }
+				}
+				if (x < 0) continue;
+				int p, g, sib;
+				detachLeaf(x, p, g, sib);
+				vector<i64> sd; i64 rootDelta = 0; vector<int> dummy;
+				sector::computeDeltas(S, gv, args.sectorGenes, x, sd, rootDelta, dummy, (int)nTaxa, s3[0]);
+				vector<std::pair<i64,int>> cands;
+				for (int u2 = 0; u2 < S.n; ++u2) {
+					if (u2 == S.root || S.taxon[u2] >= 0) continue;
+					if (sd[(size_t)u2] > 0) cands.emplace_back(sd[(size_t)u2], u2);
+				}
+				if (rootDelta > 0) cands.emplace_back(rootDelta, -1);
+				std::sort(cands.begin(), cands.end(), std::greater<>());
+				if (cands.size() > 3) cands.resize(3);
+				i64 best = 0; int bestV = -2;
+				for (auto const& cc : cands) {
+					i64 const d = tryInsertDetached(x, p, g, cc.second, false);
+					if (d > best) { best = d; bestV = cc.second; }
+				}
+				++done;
+				if (bestV != -2 && best > 0) {
+					if (getenv("SPR_VERIFY")) {
+						std::cerr << "[DBG] move x=" << x << " p=" << p << " g=" << g << " v=" << bestV
+							<< " | Path(g):"; for (int z = g; z >= 0; z = S.par[z]) std::cerr << " " << z;
+						int const uu = (bestV < 0) ? -1 : S.par[bestV];
+						std::cerr << " | Path(u):"; for (int z = uu; z >= 0; z = S.par[z]) std::cerr << " " << z;
+						std::cerr << std::endl;
+					}
+					tryInsertDetached(x, p, g, bestV, true);
+					verifyAll("commit");
+					total += best; gain += best; ++accepted; ++acc2; gain2 += best;
+				} else {
+					restoreDetached(x, p, g, sib);
+				}
+			}
+			std::cerr << "[spr] sector: " << done << " taxa, accepted " << acc2 << " gain " << gain2 << std::endl;
+		}
 		if (args.target > 0.0) {
 			pool.clear();
 			for (int k = 0; k < K; ++k) {
