@@ -247,6 +247,7 @@ struct Args {
 	int screen = 0;        // >0：先用 screen 棵树筛选移动，通过后再用全部树确认
 	int localDepth = 0;    // >0：v 优先在 x 原位置附近 localDepth 条边内选（局部 SPR）
 	int kick = 0;          // >0：前 kick 次移动无条件接受（扰动重启）
+	int allowLeaf = 0;     // 1：允许移动单个叶子（leaf SPR）
 	long long seed = 1;
 	bool verbose = false;
 };
@@ -267,6 +268,7 @@ Args parseArgs(int argc, char** argv) {
 		else if (s == "--screen") a.screen = std::stoi(next());
 		else if (s == "--local") a.localDepth = std::stoi(next());
 		else if (s == "--kick") a.kick = std::stoi(next());
+		else if (s == "--leaf") a.allowLeaf = std::stoi(next());
 		else if (s == "-v") a.verbose = true;
 		else { std::cerr << "unknown arg " << s << std::endl; std::exit(2); }
 	}
@@ -395,9 +397,10 @@ int main(int argc, char** argv) {
 			}
 			if (x < 0) {
 				if (args.target > 0.0 && !pool.empty()) x = pool[(size_t)(rng() % (u64)pool.size())].second;
+				else if (args.allowLeaf) x = (int)(rng() % (u64)S.n);
 				else x = S.internal[(size_t)(rng() % (u64)K)];
 			}
-			if (S.sz[x] < 2 || S.sz[x] > (int)nTaxa - 2) continue;
+			if (S.sz[x] < (args.allowLeaf ? 1 : 2) || S.sz[x] > (int)nTaxa - 2) continue;
 			int const p = S.par[x];
 			if (p < 0) continue;
 			int const g = S.par[p];
