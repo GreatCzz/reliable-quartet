@@ -269,20 +269,28 @@ int main(int argc, char** argv) {
 	std::mt19937_64 rng(1);
 	auto t0 = std::chrono::steady_clock::now();
 	vector<i64> delta; i64 rootDelta = 0; vector<int> dummy;
-	if (getenv("DUMP_X")) {
-		int const x = atoi(getenv("DUMP_X"));
+	if (getenv("DUMP_NAME")) {
+		string const nm = getenv("DUMP_NAME");
+		int xid = -1;
+		for (int t = 0; t < (int)nTaxa; ++t) if (common::taxonName2ID[(size_t)t] == nm) xid = t;
+		int x = -1;
+		for (int u = 0; u < S.n; ++u) if (S.taxon[u] == xid) x = u;
+		if (x < 0) { std::cerr << "taxon not found\n"; return 1; }
 		sector::computeDeltas(S, gv, nG, x, delta, rootDelta, dummy, (int)nTaxa, sc);
-		for (int u = 0; u < S.n; ++u) if (u != S.root && S.taxon[u] < 0) std::cout << u << "\t" << delta[(size_t)u] << "\n";
+		for (int u = 0; u < S.n; ++u) if (S.taxon[u] >= 0 && u != x)
+			std::cout << common::taxonName2ID[(size_t)S.taxon[u]] << "\t" << delta[(size_t)u] << "\n";
 		std::cerr << "rootDelta=" << rootDelta << "\n";
 		return 0;
 	}
+	int const nThr = (argc > 5) ? atoi(argv[5]) : 1;
 	for (int k = 0; k < K; ++k) {
 		int const x = leaves[rng() % leaves.size()];
-		sector::computeDeltas(S, gv, nG, x, delta, rootDelta, dummy, (int)nTaxa, sc);
+		if (nThr > 1) sector::computeDeltasPar(S, gv, nG, x, delta, rootDelta, dummy, (int)nTaxa, sc, nThr);
+		else sector::computeDeltas(S, gv, nG, x, delta, rootDelta, dummy, (int)nTaxa, sc);
 	}
 	auto t1 = std::chrono::steady_clock::now();
 	double const sec = std::chrono::duration<double>(t1 - t0).count();
-	std::cerr << "[sector-bench] genes=" << nG << " taxa=" << K << " time=" << sec
+	std::cerr << "[sector-bench] genes=" << nG << " taxa=" << K << " threads=" << nThr << " time=" << sec
 		<< " s  (" << (sec / K * 1000) << " ms/taxon)\n";
 	return 0;
 }
