@@ -54,7 +54,13 @@ cd ../..
 # 4) 全量 NNI 精修（增量实现，约 3 分钟/轮）
 ./rscore/solver/nni_incr -s submissions/team01_nni_v3.tree -i rep01.trees.gz -t 26 --sweeps 2 -o out.nwk
 
-# 5) 自检（打分器正确性 + 提交树合法性）
+# 5) 扇区法：一次建表 + 应用前 K 个最优单叶重挂（本地盘放 T 表）
+./rscore/solver/sector_sweep --species submissions/team01_final.tree \
+    --genes rep01.trees.gz --strategy m --threads 32 --m-count 100000 --dumpbin /tmp/T.bin
+./rscore/solver/sector_place --species submissions/team01_final.tree \
+    --Tbin /tmp/T.bin --apply 200 --out /tmp/next.tree
+
+# 6) 自检（打分器正确性 + 提交树合法性）
 ./verify.sh
 ```
 
@@ -67,10 +73,53 @@ cd ../..
 | `rscore/solver/nni_incr.cpp` | **增量 13 状态 DP 驱动的 NNI** | ~3 分钟/轮（旧实现 ~38 分钟） |
 | `rscore/solver/solver.cpp` | 打分 + NNI（经典实现，逐值对拍基准） | ~38 分钟/轮 |
 | `rscore/solver/spr.cpp` | SPR 局部搜索（与整树打分逐值一致） | 首轮 +2.02% |
+| `rscore/solver/sector_sweep.cpp` | **扇区相位 1**：一次遍历算出全部 `(节点, 叶子, 方向)` 的 T 表 | 352 秒（256 线程） |
+| `rscore/solver/sector_place.cpp` | **扇区相位 2**：换根求每个叶子的**精确最优挂载位置**，按 Δ 应用前 K 个 | ~180 秒/轮 |
+| `rscore/solver/sector_exact.cpp` | 扇区独立裁判（逐位置真重算，用于对拍） | 慢，仅验证 |
 | `rscore/solver/builder.cpp` | 打分插入构造 | 分钟级 |
 | `rscore/solver/recombine.cpp` | 三分划并集 DP 重组 | 秒级 |
 | `rscore/aster2/` | ASTER2 工作副本：`rscore.hpp`（O(n) 计分）、`rscore_incr.hpp`（增量计分，仅放置） | 框架放置 1000 类群 ~10 分钟 |
 | `aster1/` | ASTER v1（ASTRAL-IV 对照，只读） | 1000 类群 ~30 分钟 |
+
+## 扇区法（sector）与最终流水线
+
+**动机**：SPR 每次迭代只随机试**一个**位置，单叶重挂的空间基本没被系统搜索过。
+
+**扇区法**：对每个叶子 x，**一次算出**它挂到任意位置的**精确**分数变化，取全局最优。
+代价是 `O(n·K)`（n 节点 × K 基因），而不是"每个位置重算一遍"。
+
+| 阶段 | 工具 | 做的事 |
+|---|---|---|
+| 相位 1 | `sector_sweep` | 一次遍历算出 `T_x(m,d)`：可靠四叶树 `x a\|b c` 中伙伴 a 落在节点 m 方向 d 的个数（定理 1，再用定理 3 化成沿路径的差分求和，所以所有叶子共享同一次遍历） |
+| 相位 2 | `sector_place` | 换根（定理 2：两个方向树只差一个节点的方向）拼出每个位置的 Δ，排序后应用前 K 个 |
+
+**实测**（起点 1,745,010,096,485,131，10000 类群 × 1000 棵树）：
+
+| 轮 | 应用 K | 本轮增益 |
+|---|---|---|
+| 1 | 200 | **+1.27e12** |
+| 2 | 200 | +1.04e11 |
+| 3 | 200 | +5.07e9 |
+| 4 | 200 | +3.4e7 |
+| 5 | 200 | +3.3e4 |
+| 6 | — | 0（收敛） |
+
+**44 分钟 +0.0791%**；增益每轮衰减 12–20 倍 → **NNI 之后只需 2–3 轮**。
+
+**最终流水线**（交错，一轮约 70 分钟）：
+
+```
+① 扇区 1 轮      K 从 200 自适应降到 1，无增益即跳过
+② NNI 5 轮
+③ SPR 1 轮       不再做单叶移动（--leaf 已去掉）
+→ 循环
+```
+
+分工：扇区榨干"单叶"空间（SPR 的随机采样做不到），SPR 负责大的拓扑重排。
+
+**正确性验证**：独立裁判 `sector_exact`（逐位置真重算）对官方 `ref_brute` **72/72**；
+快扇区对 `sector_exact` 的逐叶最优 Δ **300/300**；500 类群抽查 3/3 逐位相等。
+细节见 [`rscore/SECTOR_MATH.md`](rscore/SECTOR_MATH.md) 与 [`rscore/SECTOR_HANDOFF.md`](rscore/SECTOR_HANDOFF.md)。
 
 ## 目录结构
 
@@ -84,7 +133,7 @@ cd ../..
 ├── rep01.trees.gz          ← 1 号队伍输入数据（1000 棵基因树）
 ├── scorer/                 ← Python 参考实现（暴力 + 快速公式 + 对拍）
 ├── rscore/                 ← C++ 工具与实验
-│   ├── solver/             ← score / score_fast / solver / nni_incr / spr / builder / recombine
+│   ├── solver/             ← score / score_fast / solver / nni_incr / spr / sector_* / builder / recombine
 │   ├── aster2/             ← ASTER2 副本 + 计分接口（rscore.hpp / rscore_incr.hpp）
 │   ├── NNI_INCR.md         ← 增量 NNI 的设计、验证与收敛轨迹
 │   ├── FEASIBILITY_incremental.md ← 增量计分可行性报告
@@ -105,6 +154,8 @@ cd ../..
 | 工具用法、参数、性能 | [rscore/USAGE.md](rscore/USAGE.md) |
 | 增量 NNI 的设计与实测 | [rscore/NNI_INCR.md](rscore/NNI_INCR.md) |
 | 增量计分可行性（13 状态 DP） | [rscore/FEASIBILITY_incremental.md](rscore/FEASIBILITY_incremental.md) |
+| **扇区法：数学定理与证明** | [rscore/SECTOR_MATH.md](rscore/SECTOR_MATH.md) |
+| **扇区法：实测、命令、验证记录** | [rscore/SECTOR_HANDOFF.md](rscore/SECTOR_HANDOFF.md) |
 | 我方分数历史 | [submissions/TEAM_SCORES.md](submissions/TEAM_SCORES.md) |
 | 全员评分（助教视角） | [提交树/评分结果/ALL_SCORES.md](提交树/评分结果/ALL_SCORES.md) |
 | 用 AI 协作时的约定 | [AGENTS.md](AGENTS.md) |
