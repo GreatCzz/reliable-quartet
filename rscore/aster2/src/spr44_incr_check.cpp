@@ -231,7 +231,15 @@ int main(int argc, char** argv) {
 			exit(0);
 		}
 		++tot;
-		if (first) { pred0 = pred; got0 = got; first = false; }   // 只比较相对值（A 内部节点的分数是放置无关常数）
+		if (first) { pred0 = pred; got0 = got; first = false; }
+		bool inSib = false;
+		{ int const pp = T.par[A]; int const ss = (T.ch[pp][0] == A) ? T.ch[pp][1] : T.ch[pp][0];
+		  vector<char> mark(T.ch.size(), 0);
+		  { vector<int> st{ss}; while (!st.empty()) { int x = st.back(); st.pop_back(); mark[(size_t)x] = 1; for (int c : T.ch[x]) st.push_back(c); } }
+		  if (v < mark.size() && mark[v]) inSib = true; }
+		if (tot <= 8) cerr << "    v=" << v << " inSib=" << inSib << " sz=" << Tp.leafset[v].size()
+			<< " pred-rel=" << (pred - pred0) << " got-rel=" << (got - got0)
+			<< " diff=" << ((pred - pred0) - (got - got0)) << "\n";
 		if (pred - pred0 != got - got0) ++bad;
 	}
 	cerr << "[incr-check] A=" << A << " leaves=" << Ax.size() << " positions=" << tot << " mismatches=" << bad << "\n";
