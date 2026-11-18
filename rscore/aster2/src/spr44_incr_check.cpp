@@ -85,8 +85,9 @@ int main(int argc, char** argv) {
 
 	// 选一个候选 A：第一个非根内部节点
 	int A = -1;
-	for (size_t u = 0; u < T.ch.size(); ++u) if (T.taxon[u] < 0 && (int)u != T.root && T.ch[u].size() == 2) { A = (int)u; break; }
-	if (A < 0) { cerr << "no candidate\n"; return 1; }
+	if (argc > 4) A = atoi(argv[4]);
+	else for (size_t u = 0; u < T.ch.size(); ++u) if (T.taxon[u] < 0 && (int)u != T.root && T.ch[u].size() == 2) { A = (int)u; break; }
+	if (A < 0 || T.taxon[A] >= 0 || (int)A == T.root) { cerr << "no candidate\n"; return 1; }
 
 	// T' = S - A
 	Tree Tp = T;
@@ -118,12 +119,12 @@ int main(int argc, char** argv) {
 	dfs(Tp.root);
 
 	// 对比：每个位置 v 的 Δ_new
-	int bad = 0, tot = 0;
+	int bad = 0, tot = 0; long long pred0 = 0, got0 = 0; bool first = true;
 	for (size_t v = 0; v < n; ++v) {
-		if ((int)v == Tp.root || Tp.taxon[v] == -2) continue;
+		if ((int)v == Tp.root || Tp.taxon[v] == -2 || Tp.leafset[v].empty()) continue;   // 跳过死节点
 		int u = Tp.par[v];
 		long long const Ww = W_of({{1, Ax}, {2, Tp.leafset[v]}});
-		long long const pred = (Ww + P[(size_t)u]) / 2;     // 相对 T' 的分数变化（未除 2 的部分已在 Ww/P 里）
+		long long const pred = (Ww + P[(size_t)v]) / 2;     // 路径和应含 u 自身的变化 ⇒ 用 P[v]
 		// 暴力：把 A 挂到 v 上方，整树打分
 		Tree T2 = Tp;
 		int w = (int)T2.ch.size();
@@ -133,7 +134,8 @@ int main(int argc, char** argv) {
 		T2.recomputeLeafset();
 		long long const got = scoreTree(T2) - base;
 		++tot;
-		if (pred != got) { ++bad; if (bad <= 5) cerr << "  MISMATCH v=" << v << " pred=" << pred << " got=" << got << "\n"; }
+		if (first) { pred0 = pred; got0 = got; first = false; }   // 只比较相对值（A 内部节点的分数是放置无关常数）
+		if (pred - pred0 != got - got0) { ++bad; if (bad <= 8) cerr << "  MISMATCH v=" << v << " sz(v)=" << Tp.leafset[v].size() << " pred=" << (pred - pred0) << " got=" << (got - got0) << "\n"; }
 	}
 	cerr << "[incr-check] A=" << A << " leaves=" << Ax.size() << " positions=" << tot << " mismatches=" << bad << "\n";
 	return bad == 0 ? 0 : 1;
