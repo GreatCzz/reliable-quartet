@@ -103,7 +103,7 @@ int main(int argc, char** argv) {
 
 	// W_orig(z) 与 L(z,c)
 	size_t const n = Tp.ch.size();
-	vector<long long> Worig(n, 0), P(n, 0);
+	vector<long long> Worig(n, 0), P(n, 0), Lv(n, 0);
 	{
 		vector<char> reach(n, 0);
 		vector<int> st{Tp.root};
@@ -121,7 +121,8 @@ int main(int argc, char** argv) {
 			vector<int> merged = Tp.leafset[(size_t)c];
 			merged.insert(merged.end(), Ax.begin(), Ax.end());
 			long long const Wa = W_of({{2, merged}, {1, Tp.leafset[(size_t)other]}});
-			P[(size_t)c] = P[(size_t)z] + (Wa - Worig[z]);
+			Lv[(size_t)c] = Wa - Worig[z];
+			P[(size_t)c] = P[(size_t)z] + Lv[(size_t)c];
 			dfs(c);
 		}
 	};
@@ -228,6 +229,10 @@ int main(int argc, char** argv) {
 				}
 			}
 			cerr << "  SUM/2=" << sum / 2 << "  pred=" << pred << "  Ww=" << WwFinal << "  P[v]=" << P[(size_t)v] << "\n";
+			cerr << "  P-chain (root→v):";
+			{ vector<int> chain; for (int z = (int)v; z >= 0; z = Tp.par[z]) chain.push_back(z); std::reverse(chain.begin(), chain.end());
+			  for (int z : chain) cerr << " " << z << "(L=" << Lv[(size_t)z] << ")"; }
+			cerr << "\n";
 			exit(0);
 		}
 		++tot;
