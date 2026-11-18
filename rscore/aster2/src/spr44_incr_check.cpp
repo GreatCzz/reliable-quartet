@@ -150,6 +150,21 @@ int main(int argc, char** argv) {
 				cerr << "  MISMATCH v=" << v << " onOldPath=" << onOld << " sz(v)=" << Tp.leafset[v].size()
 				     << " pred=" << (pred - pred0) << " got=" << (got - got0) << "\n";
 		}
+		if (v == 8) {
+			vector<char> r2(T2.ch.size(), 0), rp(Tp.ch.size(), 0);
+			{ vector<int> st{T2.root}; while (!st.empty()) { int u = st.back(); st.pop_back(); r2[(size_t)u] = 1; for (int c : T2.ch[u]) st.push_back(c); } }
+			{ vector<int> st{Tp.root}; while (!st.empty()) { int u = st.back(); st.pop_back(); rp[(size_t)u] = 1; for (int c : Tp.ch[u]) st.push_back(c); } }
+			long long sum = 0;
+			for (size_t z = 0; z < T2.ch.size(); ++z) {
+				long long w2 = 0, wp = 0;
+				if (z < Tp.ch.size() && rp[z] && Tp.taxon[z] == -1 && Tp.ch[z].size() == 2)
+					wp = W_of({{1, Tp.leafset[Tp.ch[z][0]]}, {2, Tp.leafset[Tp.ch[z][1]]}});
+				if (r2[z] && T2.taxon[z] == -1 && T2.ch[z].size() == 2)
+					w2 = W_of({{1, T2.leafset[T2.ch[z][0]]}, {2, T2.leafset[T2.ch[z][1]]}});
+				if (w2 != wp) { cerr << "    node " << z << " w2=" << w2 << " wp=" << wp << " d=" << (w2 - wp) << "\n"; sum += w2 - wp; }
+			}
+			cerr << "  SUM/2 = " << sum / 2 << "   formula pred = " << pred << "  (Ww=" << Ww << " P[v]=" << P[(size_t)v] << ")\n";
+		}
 		++tot;
 		if (first) { pred0 = pred; got0 = got; first = false; }   // 只比较相对值（A 内部节点的分数是放置无关常数）
 		if (pred - pred0 != got - got0) ++bad;
