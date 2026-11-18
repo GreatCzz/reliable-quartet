@@ -142,9 +142,17 @@ int main(int argc, char** argv) {
 		T2.par[A] = w; T2.par[(size_t)v] = w;
 		T2.recomputeLeafset();
 		long long const got = scoreTree(T2) - base;
+		{
+			// 判断 v 是否在 A 的旧路径上（A 的祖先链）
+			bool onOld = false;
+			for (int z = T.par[A]; z >= 0; z = T.par[z]) if (z == (int)v) onOld = true;
+			if ((pred - pred0) != (got - got0))
+				cerr << "  MISMATCH v=" << v << " onOldPath=" << onOld << " sz(v)=" << Tp.leafset[v].size()
+				     << " pred=" << (pred - pred0) << " got=" << (got - got0) << "\n";
+		}
 		++tot;
 		if (first) { pred0 = pred; got0 = got; first = false; }   // 只比较相对值（A 内部节点的分数是放置无关常数）
-		if (pred - pred0 != got - got0) { ++bad; if (bad <= 8) cerr << "  MISMATCH v=" << v << " sz(v)=" << Tp.leafset[v].size() << " pred=" << (pred - pred0) << " got=" << (got - got0) << "\n"; }
+		if (pred - pred0 != got - got0) ++bad;
 	}
 	cerr << "[incr-check] A=" << A << " leaves=" << Ax.size() << " positions=" << tot << " mismatches=" << bad << "\n";
 	return bad == 0 ? 0 : 1;
