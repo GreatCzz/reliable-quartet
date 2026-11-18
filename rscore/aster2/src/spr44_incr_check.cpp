@@ -134,13 +134,16 @@ int main(int argc, char** argv) {
 		int u = Tp.par[v];
 		long long const Ww = W_of({{1, Ax}, {2, Tp.leafset[v]}});
 		long long const pred = (Ww + P[(size_t)v]) / 2;     // 路径和应含 u 自身的变化 ⇒ 用 P[v]
-		// 暴力：把 A 挂到 v 上方，整树打分
+		// 暴力：把 A 挂到 v 上方（复用旧父 p 的槽位，节点数与 Tp 相同）
+		int const pA = T.par[A];
 		Tree T2 = Tp;
-		int w = (int)T2.ch.size();
-		T2.ch.push_back({A, (int)v}); T2.par.push_back(u); T2.taxon.push_back(-1);
-		if (u < 0) { T2.root = w; T2.par[w] = -1; } else { for (auto& c : T2.ch[u]) if (c == (int)v) c = w; T2.par[w] = u; }
-		T2.par[A] = w; T2.par[(size_t)v] = w;
-		T2.recomputeLeafset();
+		{
+			T2.ch[pA] = {A, (int)v}; T2.taxon[pA] = -1;
+			if (u < 0) { T2.root = pA; T2.par[pA] = -1; }
+			else { for (auto& c : T2.ch[u]) if (c == (int)v) c = pA; T2.par[pA] = u; }
+			T2.par[A] = pA; T2.par[(size_t)v] = pA;
+			T2.recomputeLeafset();
+		}
 		long long const got = scoreTree(T2) - base;
 		{
 			// 判断 v 是否在 A 的旧路径上（A 的祖先链）
