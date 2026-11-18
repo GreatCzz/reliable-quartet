@@ -12,6 +12,7 @@ import sys, random
 def parse(s):
     s = s.strip().rstrip(';')
     ch, lab = [], []
+    leafLab = {}
     def rec(i):
         u = len(ch); ch.append([]); lab.append(''); i += 1
         while True:
@@ -20,7 +21,14 @@ def parse(s):
             else:
                 j = i
                 while j < len(s) and s[j] not in '(),': j += 1
-                leaf = len(ch); ch.append([]); lab.append(s[i:j]); ch[u].append(leaf); i = j
+                tok = s[i:j]
+                # 叶子也可能带 S/D 标号（如 6670D）：拆出名字，标号记在叶子的 lab 上
+                name, elab = tok, ''
+                if len(tok) > 1 and tok[-1] in 'SD' and tok[-1].isdigit() is False:
+                    name, elab = tok[:-1], tok[-1]
+                leaf = len(ch); ch.append([]); lab.append(name); ch[u].append(leaf)
+                leafLab[leaf] = elab
+                i = j
             if s[i] == ',': i += 1; continue
             if s[i] == ')': i += 1; break
         j = i
