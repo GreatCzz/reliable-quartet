@@ -127,10 +127,14 @@ int main(int argc, char** argv) {
 	};
 	dfs(Tp.root);
 
+	// Tp 的可达集合（位置只能取自可达节点，且不能是 A 自身）
+	vector<char> reachP(n, 0);
+	{ vector<int> st{Tp.root}; while (!st.empty()) { int u = st.back(); st.pop_back(); reachP[(size_t)u] = 1; for (int c : Tp.ch[u]) st.push_back(c); } }
+
 	// 对比：每个位置 v 的 Δ_new
 	int bad = 0, tot = 0; long long pred0 = 0, got0 = 0; bool first = true;
 	for (size_t v = 0; v < n; ++v) {
-		if ((int)v == Tp.root || Tp.taxon[v] == -2 || Tp.leafset[v].empty()) continue;   // 跳过死节点
+		if ((int)v == Tp.root || !reachP[v] || (int)v == A) continue;   // 只取 T' 中可达、且不是 A 自身的节点
 		int u = Tp.par[v];
 		long long const Ww = W_of({{1, Ax}, {2, Tp.leafset[v]}});
 		long long const pred = (Ww + P[(size_t)v]) / 2;     // 路径和应含 u 自身的变化 ⇒ 用 P[v]
