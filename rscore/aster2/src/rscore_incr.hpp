@@ -68,7 +68,12 @@ namespace rscore_incr {
 		g.root = 0;
 		for (size_t i = 0; i < order.size(); ++i) {
 			auto* u = order[i];
-			if (u->children.empty()) g.taxon[i] = (int)common::taxonName2ID[u->name];
+			if (u->children.empty()) {
+				string leafName = u->name;   // 叶边标号（"1129D"）不属于类群名
+				if (leafName.size() > 1 && (leafName.back() == 'S' || leafName.back() == 'D'))
+					leafName.pop_back();
+				g.taxon[i] = (int)common::taxonName2ID[leafName];
+			}
 			else for (auto* c : u->children) {
 				int const cid = id[c];
 				g.ch[i].push_back(cid);

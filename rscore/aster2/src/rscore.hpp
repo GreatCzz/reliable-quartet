@@ -76,7 +76,12 @@ namespace rscore {
 		for (size_t i = 0; i < order.size(); ++i) {
 			newick::Newick::Node const* const u = order[i];
 			if (u->children.empty()) {
-				g.taxon[i] = (int)common::taxonName2ID[u->name];
+				// 叶边也可能带 S/D 标号（如 "1129D"）：那是"叶子 1129 的分支标号"，
+				// 不是类群名。必须剥掉，否则会凭空造出一个类群、并让真类群从该基因树消失。
+				string leafName = u->name;
+				if (leafName.size() > 1 && (leafName.back() == 'S' || leafName.back() == 'D'))
+					leafName.pop_back();
+				g.taxon[i] = (int)common::taxonName2ID[leafName];
 			}
 			else {
 				for (newick::Newick::Node const* const c : u->children) {

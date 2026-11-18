@@ -39,21 +39,24 @@ def parse(s):
     return ch, lab, root
 
 def prune_to(ch, lab, root, keep):
+    # rec 返回 (子树 newick, 该子树根边是否 solid, 该子树是否已退化成单个叶子)
     def rec(u):
         if not ch[u]:
-            return (lab[u], True) if lab[u] in keep else None
+            return (lab[u], True, True) if lab[u] in keep else None
         kids = []
         for c in ch[u]:
             r = rec(c)
             if r is None: continue
-            sub, solid = r
+            sub, solid, _ = r
             solid = solid and (lab[c] != 'D')
-            kids.append((sub, solid))
+            kids.append((sub, solid, r[2]))
         if not kids: return None
-        if len(kids) == 1:
-            return (kids[0][0], kids[0][1])
-        parts = [sub + ('' if solid else 'D') for sub, solid in kids]
-        return ('(' + ','.join(parts) + ')', True)
+        if len(kids) == 1:                     # 单叉节点被抑制，原样把孩子的结果顶上去
+            return kids[0]
+        # 叶子边一律 solid（题目口径：四条末端枝全实线）。绝不能把标号拼到叶名后面：
+        # "1129" + "D" 会变成类群 "1129D"，在别的工具里就凭空多出一个假类群。
+        parts = [sub + ('' if (solid or isLeaf) else 'D') for sub, solid, isLeaf in kids]
+        return ('(' + ','.join(parts) + ')', True, False)
     r = rec(root)
     return None if r is None else r[0] + ';'
 
