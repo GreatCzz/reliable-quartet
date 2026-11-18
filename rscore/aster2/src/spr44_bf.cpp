@@ -7,6 +7,7 @@
 #include <iostream>
 #include <string>
 #include <vector>
+#include <functional>
 
 using namespace std;
 
@@ -31,11 +32,33 @@ struct Tree {
 		par[a] = id; par[b] = id;
 		return id;
 	}
+	// 从 root DFS，重建干净数组（丢掉不可达节点、修正 par）
+	void compact() {
+		vector<int> order, st{root};
+		while (!st.empty()) { int u = st.back(); st.pop_back(); order.push_back(u);
+			for (int c : ch[u]) if (taxon[c] != -2) st.push_back(c); }
+		vector<int> id(ch.size(), -1);
+		for (size_t i = 0; i < order.size(); ++i) id[(size_t)order[i]] = (int)i;
+		vector<vector<int>> nch(order.size());
+		vector<int> npar(order.size(), -1), ntax(order.size(), -1);
+		for (size_t i = 0; i < order.size(); ++i) {
+			int const u = order[i];
+			ntax[i] = (taxon[u] == -2 ? -1 : taxon[u]);
+			for (int c : ch[u]) if (id[(size_t)c] >= 0 && taxon[c] != -2) { nch[i].push_back(id[(size_t)c]); npar[id[(size_t)c]] = (int)i; }
+		}
+		ch = std::move(nch); par = std::move(npar); taxon = std::move(ntax);
+		root = 0;
+		recomputeLeafset();
+	}
+
 	void recomputeLeafset() {
 		leafset.assign(ch.size(), {});
-		for (size_t u = 0; u < ch.size(); ++u) if (taxon[u] >= 0) leafset[u] = {taxon[u]};
-		for (size_t u = 0; u < ch.size(); ++u)
-			for (int c : ch[u]) { auto& s = leafset[u]; auto& t = leafset[c]; s.insert(s.end(), t.begin(), t.end()); }
+		std::function<void(int)> dfs = [&](int u) {
+			if (taxon[u] >= 0) { leafset[(size_t)u] = {taxon[u]}; return; }
+			leafset[(size_t)u].clear();
+			for (int c : ch[u]) { dfs(c); auto& s = leafset[(size_t)u]; s.insert(s.end(), leafset[(size_t)c].begin(), leafset[(size_t)c].end()); }
+		};
+		if (!ch.empty()) dfs(root);
 	}
 };
 
@@ -98,7 +121,7 @@ int main(int argc, char** argv) {
 	cerr << "[spr44bf] taxa=" << L.T.nTaxa << " genes=" << L.genes.size() << " start=" << cur << "\n";
 	int nNode = (int)L.T.ch.size();
 	for (int it = 0; it < maxIter; ++it) {
-		long long best = cur; int bestA = -1, bestV = -1;
+		long long best = cur; int bestA = -1, bestV = -1; Tree bestT2;
 		// 对每个候选剪枝子树 A（内部节点、非根）
 		for (int A = 0; A < nNode; ++A) {
 			if (L.T.taxon[A] != -1 || A == L.T.root) continue;   // 只取活着的内部节点
@@ -120,26 +143,21 @@ int main(int argc, char** argv) {
 				if (u < 0) { T2.root = w; T2.par[w] = -1; }
 				else { for (auto& c : T2.ch[u]) if (c == v) c = w; T2.par[w] = u; }
 				T2.par[A] = w; T2.par[v] = w;
+				T2.taxon[p] = -2;   // 旧的 p 已被抑制，必须标死（否则 A 会被重复计数）
 				T2.recomputeLeafset();
 				long long s = scoreTree(T2, L.genes);
-				if (s > best) { best = s; bestA = A; bestV = v; }
+				if (s > best) { best = s; bestA = A; bestV = v; bestT2 = std::move(T2); }
 			}
 		}
 		if (bestA < 0) { cerr << "[spr44bf] converged at iter " << it << "\n"; break; }
-		// 应用
-		Tree& T2 = L.T;
-		int p = T2.par[bestA], g = T2.par[p];
-		int sib = (T2.ch[p][0] == bestA) ? T2.ch[p][1] : T2.ch[p][0];
-		if (g < 0) { T2.root = sib; T2.par[sib] = -1; }
-		else { for (auto& c : T2.ch[g]) if (c == p) c = sib; T2.par[sib] = g; }
-		int u = T2.par[bestV];
-		int w = (int)T2.ch.size();
-		T2.ch.push_back({bestA, bestV}); T2.par.push_back(u); T2.taxon.push_back(-1);
-		if (u < 0) { T2.root = w; T2.par[w] = -1; }
-		else { for (auto& c : T2.ch[u]) if (c == bestV) c = w; T2.par[w] = u; }
-		T2.par[bestA] = w; T2.par[bestV] = w;
-		T2.ch[p].clear(); T2.taxon[p] = -2;   // p 已被抑制，标死
-		T2.recomputeLeafset();
+		// 应用：直接采用胜出的 T2（避免重复实现移动逻辑）
+		L.T = std::move(bestT2);
+		L.T.compact();
+		{
+			string const nw = toNewick(L.T, L.T.root) + ";";
+			cerr << "[spr44bf] DBG emitted=" << nw.substr(0, 120) << "\n";
+			cerr << "[spr44bf] DBG rescore(in-memory)=" << scoreTree(L.T, L.genes) << "\n";
+		}
 		cerr << "[spr44bf] iter " << it << ": " << cur << " -> " << best << " (+" << (best - cur) << ")\n";
 		cur = best;
 	}
