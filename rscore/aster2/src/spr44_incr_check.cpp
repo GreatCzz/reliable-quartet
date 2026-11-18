@@ -136,8 +136,13 @@ int main(int argc, char** argv) {
 	for (size_t v = 0; v < n; ++v) {
 		if ((int)v == Tp.root || !reachP[v] || (int)v == A) continue;   // 只取 T' 中可达、且不是 A 自身的节点
 		int u = Tp.par[v];
-		long long const Ww = W_of({{1, Ax}, {2, Tp.leafset[v]}});
-		long long const pred = (Ww + P[(size_t)v]) / 2;     // 路径和应含 u 自身的变化 ⇒ 用 P[v]
+		long long Ww = 0;   // 下面在 T2 构造后用真实节点计算
+		if (getenv("DIAG_V") && v == (size_t)atoi(getenv("DIAG_V"))) {
+			vector<int> t = Tp.leafset[v]; std::sort(t.begin(), t.end());
+			cerr << "    [at-139] v=" << v << " vleaf="; for (int x : t) cerr << " " << x;
+			cerr << " | Ax="; vector<int> a = Ax; std::sort(a.begin(), a.end()); for (int x : a) cerr << " " << x;
+			cerr << " | Ww=" << Ww << " | genes=" << genes.size() << " nTaxa=" << nTaxa << "\n";
+		}
 		// 暴力：把 A 挂到 v 上方（复用旧父 p 的槽位，节点数与 Tp 相同）
 		int const pA = T.par[A];
 		Tree T2 = Tp;
@@ -148,6 +153,8 @@ int main(int argc, char** argv) {
 			T2.par[A] = pA; T2.par[(size_t)v] = pA;
 			T2.recomputeLeafset();
 		}
+		long long const WwFinal = W_of({{1, T2.leafset[T2.ch[pA][0]]}, {2, T2.leafset[T2.ch[pA][1]]}});
+		long long const pred = (WwFinal + P[(size_t)v]) / 2;   // 用真实新节点的孩子集合
 		long long const got = scoreTree(T2) - base;
 		{
 			// 判断 v 是否在 A 的旧路径上（A 的祖先链）
@@ -170,7 +177,58 @@ int main(int argc, char** argv) {
 					w2 = W_of({{1, T2.leafset[T2.ch[z][0]]}, {2, T2.leafset[T2.ch[z][1]]}});
 				if (w2 != wp) { cerr << "    node " << z << " w2=" << w2 << " wp=" << wp << " d=" << (w2 - wp) << "\n"; sum += w2 - wp; }
 			}
-			cerr << "  SUM/2 = " << sum / 2 << "   formula pred = " << pred << "  (Ww=" << Ww << " P[v]=" << P[(size_t)v] << ")\n";
+			cerr << "  SUM/2 = " << sum / 2 << "   formula pred = " << pred << "  (Ww=" << WwFinal << " P[v]=" << P[(size_t)v] << ")\n";
+		}
+		if (getenv("DIAG_V") && v == (size_t)atoi(getenv("DIAG_V"))) {
+			vector<char> r2(T2.ch.size(), 0), rp(Tp.ch.size(), 0);
+			{ vector<int> st{T2.root}; while (!st.empty()) { int x = st.back(); st.pop_back(); r2[(size_t)x] = 1; for (int c : T2.ch[x]) st.push_back(c); } }
+			{ vector<int> st{Tp.root}; while (!st.empty()) { int x = st.back(); st.pop_back(); rp[(size_t)x] = 1; for (int c : Tp.ch[x]) st.push_back(c); } }
+			// A 的子树（在 T 里）
+			vector<char> inA(T.ch.size(), 0);
+			{ vector<int> st{A}; while (!st.empty()) { int x = st.back(); st.pop_back(); inA[(size_t)x] = 1; for (int c : T.ch[x]) st.push_back(c); } }
+			bool const dbgIsA = inA[(size_t)A];
+			(void)dbgIsA;
+			long long sum = 0;
+			for (size_t z = 0; z < T2.ch.size(); ++z) {
+				long long w2 = 0, wp = 0;
+				if (z < Tp.ch.size() && rp[z] && Tp.taxon[z] == -1 && Tp.ch[z].size() == 2)
+					wp = W_of({{1, Tp.leafset[Tp.ch[z][0]]}, {2, Tp.leafset[Tp.ch[z][1]]}});
+				if (r2[z] && T2.taxon[z] == -1 && T2.ch[z].size() == 2)
+					w2 = W_of({{1, T2.leafset[T2.ch[z][0]]}, {2, T2.leafset[T2.ch[z][1]]}});
+				if (w2 != wp) {
+					string tag = (z == (size_t)pA) ? "W" : (inA[z] ? "inA" : "other");
+					cerr << "    z=" << z << " [" << tag << "] w2=" << w2 << " wp=" << wp << " d=" << (w2 - wp) << "\n";
+					sum += w2 - wp;
+				}
+			}
+			// 打印 w 与"负项"节点的具体三分划
+			for (size_t zz : {(size_t)pA, (size_t)38, (size_t)14}) {
+				if (zz >= T2.ch.size()) continue;
+				auto dump = [&](char const* tag, Tree const& TT) {
+					if (zz >= TT.ch.size()) { cerr << "    " << tag << " z=" << zz << " (absent)\n"; return; }
+					cerr << "    " << tag << " z=" << zz << " taxon=" << TT.taxon[zz] << " ch=";
+					for (int c : TT.ch[zz]) cerr << c << "(" << TT.leafset[(size_t)c].size() << ") ";
+					cerr << " leaves=" << TT.leafset[zz].size() << "\n";
+				};
+				dump("T2:", T2); dump("Tp:", Tp);
+			}
+			{
+				auto pr = [&](char const* tag, vector<int> const& vv) {
+					vector<int> t = vv; std::sort(t.begin(), t.end());
+					cerr << "    " << tag << " (" << t.size() << "):"; for (int x : t) cerr << " " << x; cerr << "\n";
+				};
+				pr("Ax", Ax);
+				if (T2.ch.size() > 14 && T2.ch[14].size() == 2) {
+					pr("T2.ch[14][0]", T2.leafset[T2.ch[14][0]]);
+					pr("T2.ch[14][1]", T2.leafset[T2.ch[14][1]]);
+					cerr << "    W(Ax, vleaf) run1=" << W_of({{1, Ax}, {2, Tp.leafset[(size_t)v]}})
+					     << " run2=" << W_of({{1, Ax}, {2, Tp.leafset[(size_t)v]}})
+					     << " run3=" << W_of({{1, Ax}, {2, Tp.leafset[(size_t)v]}}) << "\n";
+					cerr << "    W(ch0,ch1) =" << W_of({{1, T2.leafset[T2.ch[14][0]]}, {2, T2.leafset[T2.ch[14][1]]}}) << "\n";
+				}
+			}
+			cerr << "  SUM/2=" << sum / 2 << "  pred=" << pred << "  Ww=" << WwFinal << "  P[v]=" << P[(size_t)v] << "\n";
+			exit(0);
 		}
 		++tot;
 		if (first) { pred0 = pred; got0 = got; first = false; }   // 只比较相对值（A 内部节点的分数是放置无关常数）
