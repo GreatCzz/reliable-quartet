@@ -237,7 +237,11 @@ int main(int argc, char** argv) {
 		  vector<char> mark(T.ch.size(), 0);
 		  { vector<int> st{ss}; while (!st.empty()) { int x = st.back(); st.pop_back(); mark[(size_t)x] = 1; for (int c : T.ch[x]) st.push_back(c); } }
 		  if (v < mark.size() && mark[v]) inSib = true; }
-		if (tot <= 8) cerr << "    v=" << v << " inSib=" << inSib << " sz=" << Tp.leafset[v].size()
+		bool ancOfP = false, pAncOfV = false;
+		{ int const pp = T.par[A];
+		  for (int z = pp; z >= 0; z = T.par[z]) if (z == (int)v) ancOfP = true;
+		  for (int z = (int)v; z >= 0; z = T.par[z]) if (z == pp) pAncOfV = true; }
+		if ((pred - pred0) != (got - got0)) cerr << "    v=" << v << " ancOfP=" << ancOfP << " pAncOfV=" << pAncOfV << " sz=" << Tp.leafset[v].size()
 			<< " pred-rel=" << (pred - pred0) << " got-rel=" << (got - got0)
 			<< " diff=" << ((pred - pred0) - (got - got0)) << "\n";
 		if (pred - pred0 != got - got0) ++bad;
