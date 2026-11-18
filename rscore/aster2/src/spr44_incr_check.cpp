@@ -50,7 +50,10 @@ long long W_of(vector<pair<int, vector<int>>> const& assign) {   // (mask, leafs
 
 long long scoreTree(Tree const& T) {
 	long long tot = 0;
+	vector<char> reach(T.ch.size(), 0);
+	{ vector<int> st{T.root}; while (!st.empty()) { int u = st.back(); st.pop_back(); reach[(size_t)u] = 1; for (int c : T.ch[u]) st.push_back(c); } }
 	for (size_t u = 0; u < T.ch.size(); ++u) {
+		if (!reach[u]) continue;
 		if (T.taxon[u] >= 0 || T.ch[u].size() != 2) continue;
 		tot += W_of({{1, T.leafset[T.ch[u][0]]}, {2, T.leafset[T.ch[u][1]]}});
 	}
@@ -101,9 +104,15 @@ int main(int argc, char** argv) {
 	// W_orig(z) 与 L(z,c)
 	size_t const n = Tp.ch.size();
 	vector<long long> Worig(n, 0), P(n, 0);
-	for (size_t z = 0; z < n; ++z) {
-		if (Tp.taxon[z] != -1 || Tp.ch[z].size() != 2) continue;
-		Worig[z] = W_of({{1, Tp.leafset[Tp.ch[z][0]]}, {2, Tp.leafset[Tp.ch[z][1]]}});
+	{
+		vector<char> reach(n, 0);
+		vector<int> st{Tp.root};
+		while (!st.empty()) { int u = st.back(); st.pop_back(); reach[(size_t)u] = 1; for (int c : Tp.ch[u]) st.push_back(c); }
+		for (size_t z = 0; z < n; ++z) {
+			if (!reach[z]) continue;
+			if (Tp.taxon[z] != -1 || Tp.ch[z].size() != 2) continue;
+			Worig[z] = W_of({{1, Tp.leafset[Tp.ch[z][0]]}, {2, Tp.leafset[Tp.ch[z][1]]}});
+		}
 	}
 	// 前缀和（root 为 0）
 	std::function<void(int)> dfs = [&](int z) {
