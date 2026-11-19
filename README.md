@@ -148,6 +148,7 @@ cd ../..
 
 | 想了解 | 看 |
 |---|---|
+| **给外部 agent 的完整项目说明（问题/方法/死路/剩余空间）** | **[PROJECT_HANDOFF_FOR_AGENT.md](PROJECT_HANDOFF_FOR_AGENT.md)** |
 | 新会话如何接手 | [handoff/00_START_HERE.md](handoff/00_START_HERE.md) |
 | 题目定义、数据、口径 | [题目解读.md](题目解读.md) |
 | 打分公式推导与验证 | [scorer/SPEC.md](scorer/SPEC.md) |
