@@ -230,6 +230,11 @@ int main(int argc, char** argv) {
 			long long const Ww = W_of({{1, X}, {2, T2.leafset[v]}});
 			long long const pred2 = -scoreS + sumA + Ww + sumV + P[v];
 			++nPos;
+			if (getenv("DUMP")) {
+				static string xkey; xkey.clear();
+				{ vector<int> t = X; sort(t.begin(), t.end()); for (int z : t) { if (!xkey.empty()) xkey += ","; xkey += common::taxonName2ID[(size_t)z]; } }
+				cout << xkey << "\t" << pred2 << "\n";
+			}
 			if (getenv("SKIPBRUTE")) { continue; }
 			Tree const S2 = insertA(T2, (int)v, T, A);
 			long long const got2 = score2Tree(S2) - scoreS;
